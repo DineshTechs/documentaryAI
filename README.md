@@ -26,36 +26,53 @@ cinematic-skill is normally driven by Claude Code or Codex. This app has its own
 - **Ideas & calendar**: a kanban board (Ideas → Research → Production → Scheduled → Published), AI brainstorming, a
   monthly release calendar, and "Make film" on any idea.
 - **Telegram bot**: control everything from your phone and get push notifications (see below).
-- Password login, HTTPS through Caddy, and everything stored in one Docker volume.
+- Password login and automatic HTTPS (Caddy). Runs natively on Ubuntu or WSL with one install script; Docker is optional.
 
-## Deploy on a cloud server
+## Deploy on a cloud server (no Docker)
 
-**Server:** Ubuntu 22.04/24.04 VPS with at least **4 vCPU and 8 GB RAM** (16 GB recommended). Rendering is
-CPU-heavy: a 90-second 1080p film takes about 6 minutes on a 16 GB machine. Hetzner, DigitalOcean, Contabo and
-AWS Lightsail all work.
+**Server:** Ubuntu **24.04** (or 22.04) VPS with at least **4 vCPU and 8 GB RAM** (16 GB recommended), and full root
+access. Choose plain Ubuntu, with no cPanel or Plesk image, because those panels take the web ports the app's HTTPS
+needs. Rendering is CPU-heavy: a 90-second 1080p film takes about 6 minutes on a 16 GB machine. MilesWeb, Hetzner,
+DigitalOcean and Contabo all work.
 
-1. **Point a domain** (e.g. `studio.yourchannel.com`) at the server's IP with a DNS **A record**.
-2. **Install Docker** on the server:
+1. **Point a domain** (e.g. `studio.yourchannel.in`) at the server's IP with a DNS **A record**.
+2. **Get the code onto the server** (log in with SSH first: `ssh root@SERVER_IP`):
    ```bash
-   curl -fsSL https://get.docker.com | sh
+   git clone https://github.com/DineshTechs/documentaryAI.git /opt/documentary-studio
+   cd /opt/documentary-studio
    ```
-3. **Copy this folder to the server**, for example with `scp -r documentaryVideoProject user@SERVER_IP:~/`, or push it
-   to a private GitHub repo and `git clone` it on the server.
-4. **Configure:**
+   (For a private repo, GitHub asks for your username and a personal access token as the password.)
+3. **Install:**
    ```bash
-   cd documentaryVideoProject
-   cp .env.example .env
-   nano .env          # set DOMAIN, BASE_URL, APP_PASSWORD, SECRET_KEY (openssl rand -hex 32)
+   sudo bash install.sh --domain studio.yourchannel.in
    ```
-5. **Start it:**
-   ```bash
-   docker compose up -d --build
-   ```
-   Open `https://your-domain`, log in, and go to **Settings**.
+   It installs Python, ffmpeg, espeak-ng, fonts, cinematic-skill and the Python packages. It asks you to choose the
+   web-app password, creates a `studio` user to run the app (never root), and sets the app up as a service that
+   starts on boot. It also installs **Caddy** for free automatic HTTPS and opens ports 80/443.
+4. Open `https://studio.yourchannel.in`, log in, and go to **Settings**.
 
-**Update cinematic-skill later:** `docker compose build --no-cache studio && docker compose up -d`.
+**Everyday commands on the server:**
 
-**Backups:** all data (database and film workspaces) lives in the `studio-data` Docker volume.
+| What | Command |
+|---|---|
+| Update the app + cinematic-skill (after you `git_push.bat`) | `cd /opt/documentary-studio && sudo bash update.sh` |
+| Live logs | `journalctl -u documentary-studio -f` |
+| Restart / stop / start | `sudo systemctl restart documentary-studio` (or `stop` / `start`) |
+| Change the web password | edit `/opt/documentary-studio/.env`, then restart |
+
+**Where things live:** code in `/opt/documentary-studio`; films, database, Python packages and cinematic-skill in
+`/home/studio/.documentary-studio/`. Back up `/home/studio/.documentary-studio/data`.
+
+<details><summary>Alternative: run with Docker instead</summary>
+
+```bash
+curl -fsSL https://get.docker.com | sh
+cp .env.example .env && nano .env      # set DOMAIN, APP_PASSWORD, SECRET_KEY (openssl rand -hex 32)
+docker compose up -d --build
+```
+Update cinematic-skill with `docker compose build --no-cache studio && docker compose up -d`. Data lives in the
+`studio-data` Docker volume. Don't run the Docker setup and the native install on the same server at once.
+</details>
 
 ### First-time setup in the app (Settings page)
 
@@ -68,8 +85,10 @@ AWS Lightsail all work.
 5. **YouTube** (for auto-upload):
    - In [Google Cloud Console](https://console.cloud.google.com/), create a project and enable **YouTube Data API v3**.
    - Set up the **OAuth consent screen** (External), and add your Google account as a **test user**.
-   - Create **Credentials → OAuth client ID → Web application**, with the redirect URI shown in Settings
-     (`https://your-domain/oauth/youtube/callback`).
+   - Create **Credentials → OAuth client ID → Web application**, with the redirect URI shown in Settings.
+     The app detects it automatically from where it's running. If you use the app both locally and on the
+     server, add both to the same client:
+     `https://your-domain/oauth/youtube/callback` and `http://localhost:8000/oauth/youtube/callback`.
    - Paste the client ID and secret into Settings, save, and click **Connect YouTube channel**.
    - Note: while the Google app is in "Testing" mode, refresh tokens expire after 7 days, so you'll need to reconnect.
      Publishing the consent screen avoids that. Custom thumbnails need a phone-verified YouTube channel.
@@ -103,15 +122,28 @@ The bot uses long polling from your server, so it needs no webhook or extra port
 
 Telegram limits: bots can send files up to 50 MB and receive files up to 20 MB. Bigger files go through the web app.
 
-## Run locally (Windows / Mac) for testing
+## Run on your Windows PC (no Docker)
 
-With Docker Desktop installed:
-```bash
-docker build -t documentary-studio .
-docker run -p 8000:8000 -e APP_PASSWORD=test -e SECRET_KEY=dev -v studio-data:/data documentary-studio
-```
-Then open http://localhost:8000. For local YouTube login, add `http://localhost:8000/oauth/youtube/callback` as a
-redirect URI too.
+The app runs inside **WSL** (Windows Subsystem for Linux), the free Ubuntu built into Windows 10/11, using the same
+`install.sh` as the server.
+
+1. Double-click **`run_app.bat`**.
+   - If WSL isn't installed, it offers to install it. After that, restart the PC, open **Ubuntu** from the Start menu
+     once to create a Linux username and password, then double-click `run_app.bat` again.
+   - The first run installs everything inside Ubuntu (5–15 minutes). It asks for your Linux password, then a password
+     for the web app.
+2. Your browser opens **http://localhost:8000**. Keep the window open while you work: closing it stops the app.
+
+| File | What it does |
+|---|---|
+| `run_app.bat` | Install (first time) and start the app via WSL |
+| `stop_app.bat` | Stop the app (WSL or Docker) |
+| `update_app.bat` | Update cinematic-skill and Python packages |
+| `git_push.bat` | Commit and push your code to GitHub |
+| `run_app_docker.bat` | Optional: run with Docker Desktop instead of WSL |
+
+Films and settings are stored inside Ubuntu at `~/.documentary-studio/` (fast Linux disk), separate from the
+server's. On Mac or plain Linux, run `./install.sh` once, then `./run.sh`.
 
 ## How the agent works
 
@@ -133,8 +165,8 @@ Browser UI ──► Flask API ──► Agent thread (per film)
 
 ## Security notes
 
-- The agent can run shell commands inside the container, so keep `APP_PASSWORD` strong. The container runs as a
-  non-root user and only sees its own volume.
+- The agent can run shell commands on the machine, so keep `APP_PASSWORD` strong. On the server it runs as the
+  unprivileged `studio` user (or a non-root user in Docker), never as root.
 - API keys are stored in the SQLite database on your server, and the UI only shows their last 4 characters.
 
 ## Project layout
@@ -150,7 +182,9 @@ app/
   services.py  actions shared by the web API and the bot
   db.py        SQLite storage
 static/        single-page UI (no build step)
-Dockerfile, docker-compose.yml, Caddyfile, .env.example
+install.sh, run.sh, update.sh       native install / start / update (Ubuntu server, WSL, Mac/Linux)
+*.bat                               Windows helpers (WSL, Docker, git push)
+Dockerfile, docker-compose.yml, Caddyfile, .env.example   optional Docker setup
 ```
 
 cinematic-skill is MIT-licensed © exploraX. Images fetched through it come from Wikimedia Commons, so keep the
