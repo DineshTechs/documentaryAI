@@ -55,7 +55,7 @@ DigitalOcean and Contabo all work.
 
 | What | Command |
 |---|---|
-| Update the app + cinematic-skill (after you `git_push.bat`) | `cd /opt/documentary-studio && sudo bash update.sh` |
+| Update the app + cinematic-skill (after you `git_push.bat`) | `sudo bash /opt/documentary-studio/studio.sh update main` (or `deploy.bat main` on your PC) |
 | Live logs | `journalctl -u documentary-studio -f` |
 | Restart / stop / start | `sudo systemctl restart documentary-studio` (or `stop` / `start`) |
 | Change the web password | edit `/opt/documentary-studio/.env`, then restart |
@@ -139,11 +139,80 @@ The app runs inside **WSL** (Windows Subsystem for Linux), the free Ubuntu built
 | `run_app.bat` | Install (first time) and start the app via WSL |
 | `stop_app.bat` | Stop the app (WSL or Docker) |
 | `update_app.bat` | Update cinematic-skill and Python packages |
-| `git_push.bat` | Commit and push your code to GitHub |
+| `git_push.bat` | Commit and push your current branch to GitHub |
+| `switch_branch.bat` | Switch between develop / main / a feature branch |
+| `deploy.bat [name]` | Update a copy on the server (e.g. `deploy.bat staging`) |
+| `release.bat` | Merge develop into main and put it live |
 | `run_app_docker.bat` | Optional: run with Docker Desktop instead of WSL |
 
 Films and settings are stored inside Ubuntu at `~/.documentary-studio/` (fast Linux disk), separate from the
 server's. On Mac or plain Linux, run `./install.sh` once, then `./run.sh`.
+
+## Development and multiple deployments
+
+Run several copies of the app on one server, e.g. **staging** for testing and **main** for your live channel. Each
+copy has its own folder, domain, password, port, films, settings, service and code branch, so testing never touches
+the live copy.
+
+```
+ Your PC (WSL)              GitHub                      MilesWeb server
+ ───────────────            ─────────────────           ─────────────────────────────────────────
+ edit + test locally  ──►   develop branch  ──deploy──► staging   https://staging.yourchannel.in
+ run_app.bat                     │ release.bat
+                                 ▼
+                            main branch     ──deploy──► main      https://studio.yourchannel.in
+```
+
+### One-time setup
+
+1. **Server, live copy:** install `main` as described in [Deploy on a cloud server](#deploy-on-a-cloud-server-no-docker).
+2. **PC:** double-click `switch_branch.bat`, choose **develop**, then `git_push.bat`. This creates the `develop`
+   branch on GitHub.
+3. **DNS:** add an A record for `staging.yourchannel.in` pointing to the same server IP.
+4. **Server, staging copy:**
+   ```bash
+   sudo bash /opt/documentary-studio/studio.sh new staging --domain staging.yourchannel.in --branch develop
+   ```
+   It asks for a separate password for the staging site and picks a free port automatically (8001, 8002, …).
+5. **PC:** the first time you run `deploy.bat`, it asks for your server login (e.g. `root@123.45.67.89`) and saves it
+   in `deploy.config`, which isn't pushed to GitHub.
+
+### Everyday flow
+
+| Step | On your PC |
+|---|---|
+| 1. Work on **develop** and test locally | `run_app.bat` (http://localhost:8000) |
+| 2. Save to GitHub | `git_push.bat` |
+| 3. Try it on the staging site | `deploy.bat staging` |
+| 4. Happy? Put it live | `release.bat` (merges develop → main, pushes, offers to deploy main) |
+| Hotfix or feature branch | `switch_branch.bat` → option 3 |
+
+`deploy.bat` warns you if you have changes that aren't pushed yet. When the target is `main`, it asks you to confirm.
+
+### Server commands (`studio.sh`)
+
+| Command | What it does |
+|---|---|
+| `sudo bash studio.sh list` | All copies: status, port, branch, URL, folder |
+| `sudo bash studio.sh new NAME --domain D --branch B [--port P]` | Add a copy (e.g. `test`, `client2`, `channel2`) |
+| `sudo bash studio.sh update NAME` / `update all` | Pull its branch from GitHub, update packages, restart |
+| `sudo bash studio.sh logs NAME` | Live logs |
+| `sudo bash studio.sh restart\|stop\|start NAME` | Control the service |
+| `sudo bash studio.sh remove NAME [--purge]` | Remove a copy (`--purge` also deletes its files and films) |
+
+Run these from `/opt/documentary-studio`. Every copy has its own `studio.sh` too.
+
+### Good to know
+
+- **Telegram:** each copy needs its **own bot** (make one per copy with @BotFather). Two copies can't share a token.
+- **YouTube:** add each copy's callback (`https://staging.…/oauth/youtube/callback`, `https://studio.…/oauth/…`) to
+  the same Google OAuth client. To avoid test uploads on your real channel, connect staging to a second channel, or
+  only upload as **private** from staging.
+- **AI keys and costs:** each copy has its own Settings, so you can give staging a cheaper model.
+- **CPU:** copies share the server, so two films rendering at once each take about twice as long. Stop staging when
+  you're not using it: `sudo bash studio.sh stop staging`.
+- **Private GitHub repo:** the server asks for your GitHub token on the first update of each copy, then remembers it.
+- Never edit code directly on the server. Changes there block updates (`update` will say so).
 
 ## How the agent works
 
@@ -183,6 +252,7 @@ app/
   db.py        SQLite storage
 static/        single-page UI (no build step)
 install.sh, run.sh, update.sh       native install / start / update (Ubuntu server, WSL, Mac/Linux)
+studio.sh                           manage several copies on one server (new, list, update, logs, remove)
 *.bat                               Windows helpers (WSL, Docker, git push)
 Dockerfile, docker-compose.yml, Caddyfile, .env.example   optional Docker setup
 ```

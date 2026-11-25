@@ -4,12 +4,6 @@ title Push to GitHub - documentaryAI
 cd /d "%~dp0"
 
 set "REPO_URL=https://github.com/DineshTechs/documentaryAI.git"
-set "BRANCH=main"
-
-echo.
-echo  ==== Push Documentary Studio to GitHub ====
-echo  Repo: %REPO_URL%
-echo.
 
 where git >nul 2>&1
 if errorlevel 1 (
@@ -18,14 +12,29 @@ if errorlevel 1 (
   exit /b 1
 )
 
-rem ---- first run: create the repository
+rem ---- first run: create the repository on branch main
 if not exist ".git" (
   echo Creating git repository...
   git init
   if errorlevel 1 goto fail
-  git symbolic-ref HEAD refs/heads/%BRANCH%
+  git symbolic-ref HEAD refs/heads/main
 )
-git branch -M %BRANCH% >nul 2>&1
+
+rem ---- push whichever branch you are on - develop for testing, main for the live site
+set "BRANCH="
+for /f "delims=" %%b in ('git symbolic-ref --short HEAD 2^>nul') do set "BRANCH=%%b"
+if "%BRANCH%"=="" (
+  echo [ERROR] Not on a branch. Run switch_branch.bat first.
+  pause
+  exit /b 1
+)
+
+echo.
+echo  ==== Push to GitHub ====
+echo  Repo  : %REPO_URL%
+echo  Branch: %BRANCH%
+if /i "%BRANCH%"=="main" echo  NOTE  : main is the LIVE branch. For work in progress use switch_branch.bat - develop.
+echo.
 
 rem ---- point "origin" at GitHub
 git remote get-url origin >nul 2>&1
@@ -48,17 +57,17 @@ set "MSG=%~1"
 if "%MSG%"=="" set /p "MSG=Commit message (press Enter for an automatic one): "
 if "%MSG%"=="" set "MSG=Update %date% %time:~0,5%"
 
-rem ---- stage everything (.gitignore keeps .env, .env.local and data out)
+rem ---- stage everything (.gitignore keeps .env, .env.local, .env.native, deploy.config and data out)
 git add -A
 if errorlevel 1 goto fail
 rem keep the Linux scripts executable for the server (Windows doesn't track this)
-git update-index --chmod=+x install.sh run.sh update.sh >nul 2>&1
+git update-index --chmod=+x install.sh run.sh update.sh studio.sh >nul 2>&1
 
 rem ---- safety net: never push secrets
-git diff --cached --name-only | findstr /r /i /c:"^\.env$" /c:"^\.env\.local$" /c:"\.db$" >nul
+git diff --cached --name-only | findstr /r /i /c:"^\.env$" /c:"^\.env\.local$" /c:"^\.env\.native$" /c:"^deploy\.config$" /c:"\.db$" >nul
 if not errorlevel 1 (
   echo.
-  echo [STOP] A secrets file .env / .env.local or a database is staged.
+  echo [STOP] A secrets or settings file is staged: .env / .env.local / .env.native / deploy.config / a database.
   echo        Check .gitignore, then run this again. Nothing was pushed.
   git reset -q
   pause
@@ -75,13 +84,12 @@ if errorlevel 1 (
 
 rem ---- push (the first time a GitHub login window may open)
 echo.
-echo Pushing to %BRANCH%...
+echo Pushing %BRANCH%...
 git push -u origin %BRANCH%
 if not errorlevel 1 goto done
 
 echo.
-echo GitHub has commits you don't have locally, e.g. a README made on github.com.
-echo Merging them in, then pushing again...
+echo GitHub has commits you don't have locally. Merging them in, then pushing again...
 git pull origin %BRANCH% --allow-unrelated-histories --no-edit
 if errorlevel 1 goto conflict
 git push -u origin %BRANCH%
@@ -89,8 +97,9 @@ if errorlevel 1 goto fail
 
 :done
 echo.
-echo  Done. See it at https://github.com/DineshTechs/documentaryAI
+echo  Done: %BRANCH% is on GitHub. Deploy it with deploy.bat
 echo.
+if "%~2"=="nopause" exit /b 0
 pause
 exit /b 0
 

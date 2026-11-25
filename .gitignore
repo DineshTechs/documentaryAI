@@ -1,6 +1,7 @@
 .env
 .env.local
 .env.native
+deploy.config
 data/
 *.db
 __pycache__/
