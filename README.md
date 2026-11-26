@@ -1,261 +1,207 @@
-# Documentary Studio
+# Documentary Studio (Node.js)
 
-A web app for a YouTube documentary channel, built around
-[cinematic-skill](https://github.com/Moh4696/cinematic-skill). cinematic-skill makes narrated cinematic films from
-code, using archive photos, maps, clippings, stamps and red string, with Skia and ffmpeg doing the drawing.
+An AI documentary studio for a YouTube channel. You give it a topic; its agent researches the story, writes the
+script, finds archive images, records the narration and directs the film. A built-in renderer then makes a 1080p
+MP4 with captions, chapters and mixed audio. You approve each key step from the web app or Telegram, then publish
+straight to YouTube.
 
-cinematic-skill is normally driven by Claude Code or Codex. This app has its own built-in AI agent that reads the skill's
-`SKILL.md` and runs its scripts on your server, so you can make films from the browser with any AI provider.
+**Version 2 is pure Node.js:** no Docker, no Python, and no root or `sudo` access needed. It runs as a normal
+**cPanel "Setup Node.js App"** (shared hosting), on any VPS, or on your own PC (Windows included).
 
 ## Features
 
-- **Film pipeline**: Story → Voice → Images → Scene → Review → Render, all run by the agent with live progress.
-  The agent stops for your approval at the skill's checkpoints (beat table, look, 30-second draft). You can approve
-  or request changes, and you can message the agent at any time.
-- **Any AI provider**: Anthropic Claude, OpenAI, Google Gemini, OpenRouter, DeepSeek, Groq, Mistral, xAI, or any
-  OpenAI-compatible server (Ollama, LM Studio, vLLM). Set a default, override it per film, and switch mid-film.
-- **Narration voice**: OpenAI TTS, ElevenLabs or espeak-ng. You can also upload your own voice recording.
-- **Research**: Wikipedia search and page reading built in. Add a Brave Search key for full web search.
-- **Files**: browse every script, beat table, image, still and render. Edit text files in the browser and upload your
-  own photos or music.
-- **Preview**: watch drafts and the final film, see review stills, and download the MP4 and SRT.
-- **YouTube metadata**: AI-written titles (5 options), description with chapters and the image credits the licences
-  require, tags, and thumbnail ideas. Grab a thumbnail frame from the video or upload your own.
-- **Auto-upload to YouTube**: resumable upload, with captions (SRT) and the thumbnail attached automatically. Publish
-  as private, unlisted or public, or schedule a release time.
-- **Ideas & calendar**: a kanban board (Ideas → Research → Production → Scheduled → Published), AI brainstorming, a
-  monthly release calendar, and "Make film" on any idea.
-- **Telegram bot**: control everything from your phone and get push notifications (see below).
-- Password login and automatic HTTPS (Caddy). Runs natively on Ubuntu or WSL with one install script; Docker is optional.
+- **Film pipeline**: Story → Voice → Images → Scene → Review → Render. The agent stops for your approval at the
+  beat table, the look, and the 30-second draft. You can message it at any time.
+- **Built-in documentary renderer** (Skia + ffmpeg, both installed by `npm install`):
+  - Five looks: cork evidence wall, aged-paper archive, blueprint, night, studio.
+  - Pinned polaroids, newspaper clippings, typed documents, sticky notes, stamps, red string, map markers and
+    animated routes, hand-drawn highlights, arrows, title cards, typewriter labels, animated counters.
+  - Camera moves with a subtle handheld drift, film grain, vignette, fades and flashes, and burned-in captions.
+  - Narration placed to the exact millisecond, background music that ducks under the voice, YouTube loudness
+    (-14 LUFS), and SRT captions and chapters files.
+  - Scenes are cached, so re-rendering after a small change only re-renders the scenes that changed.
+- **Any AI provider**: Claude, OpenAI, Gemini, OpenRouter, DeepSeek, Groq, Mistral, xAI, or OpenAI-compatible
+  (Ollama, LM Studio). Set one default and switch per film.
+- **Voice**: OpenAI TTS or ElevenLabs, or upload your own recording (the agent splits it into lines).
+- **Research**: Wikipedia and web pages, plus optional Brave Search. Images come from **Wikimedia Commons**
+  (free licences only), and credits are recorded automatically.
+- **YouTube**: AI titles, description with chapters and credits, tags, and thumbnail ideas. Pick a video frame as
+  the thumbnail or upload one. Upload with captions and thumbnail, set visibility, or schedule a release.
+- **Ideas & calendar**: a kanban board, AI brainstorming, a release calendar, and "Make film" from any idea.
+- **Telegram bot**: every feature plus push notifications (approvals with files, finished films with video).
+- **Setup check**: renders a test clip and tells you how long a 90-second film takes on your server.
 
-## Deploy on a cloud server (no Docker)
+---
 
-**Server:** Ubuntu **24.04** (or 22.04) VPS with at least **4 vCPU and 8 GB RAM** (16 GB recommended), and full root
-access. Choose plain Ubuntu, with no cPanel or Plesk image, because those panels take the web ports the app's HTTPS
-needs. Rendering is CPU-heavy: a 90-second 1080p film takes about 6 minutes on a 16 GB machine. MilesWeb, Hetzner,
-DigitalOcean and Contabo all work.
+## Install on cPanel hosting (e.g. MilesWeb), no root needed
 
-1. **Point a domain** (e.g. `studio.yourchannel.in`) at the server's IP with a DNS **A record**.
-2. **Get the code onto the server** (log in with SSH first: `ssh root@SERVER_IP`):
+Your hosting needs **"Setup Node.js App"** in cPanel (Node 18 or newer) and **Terminal** or SSH access.
+
+1. **Get the code.** In cPanel, open **Terminal**. Put the app *outside* `public_html`:
    ```bash
-   git clone https://github.com/DineshTechs/documentaryAI.git /opt/documentary-studio
-   cd /opt/documentary-studio
+   cd ~
+   git clone https://github.com/DineshTechs/documentaryAI.git
    ```
-   (For a private repo, GitHub asks for your username and a personal access token as the password.)
-3. **Install:**
-   ```bash
-   sudo bash install.sh --domain studio.yourchannel.in
+   For a private repo, git asks for your GitHub username and a **personal access token** (GitHub → Settings →
+   Developer settings → Fine-grained tokens, *Contents: read-only*).
+
+2. **Create the app.** In cPanel, open **Setup Node.js App → Create Application**:
+   - **Node.js version**: the newest offered (22 or 20).
+   - **Application mode**: Production.
+   - **Application root**: `documentaryAI`.
+   - **Application URL**: your domain or a subdomain, e.g. `studio.yourchannel.in` (create the subdomain under
+     cPanel → Domains first).
+   - **Application startup file**: `app.js`.
+   - Click **Create**.
+
+3. **Install packages.** On the same page, click **Run NPM Install**. This installs the graphics engine and
+   ffmpeg into the app folder.
+
+4. **Set your password.** Still on that page, add two **Environment variables**, then click **Save**:
+   - `APP_PASSWORD`: the password you'll log in with.
+   - `SECRET_KEY`: any long random text (e.g. mash the keyboard for 40+ characters).
+
+5. Click **Restart**, then open `https://studio.yourchannel.in` and log in.
+
+6. In **Settings**:
+   1. **Server check**: renders a test clip and shows how fast this server makes films.
+   2. **AI models**: add a key (e.g. Anthropic), set the default provider and model, then click **Test**.
+   3. **Narration voice**: OpenAI TTS or ElevenLabs, then click **Test voice**.
+   4. **Telegram** and **YouTube** whenever you like (below).
+
+7. **Recommended: keep the app awake.** cPanel puts idle apps to sleep. The app keeps itself awake while it's
+   making a film, but a cron job keeps it ready at all times. In cPanel → **Cron Jobs**, add *every 5 minutes*:
    ```
-   It installs Python, ffmpeg, espeak-ng, fonts, cinematic-skill and the Python packages. It asks you to choose the
-   web-app password, creates a `studio` user to run the app (never root), and sets the app up as a service that
-   starts on boot. It also installs **Caddy** for free automatic HTTPS and opens ports 80/443.
-4. Open `https://studio.yourchannel.in`, log in, and go to **Settings**.
+   curl -s https://studio.yourchannel.in/api/health > /dev/null
+   ```
 
-**Everyday commands on the server:**
-
-| What | Command |
-|---|---|
-| Update the app + cinematic-skill (after you `git_push.bat`) | `sudo bash /opt/documentary-studio/studio.sh update main` (or `deploy.bat main` on your PC) |
-| Live logs | `journalctl -u documentary-studio -f` |
-| Restart / stop / start | `sudo systemctl restart documentary-studio` (or `stop` / `start`) |
-| Change the web password | edit `/opt/documentary-studio/.env`, then restart |
-
-**Where things live:** code in `/opt/documentary-studio`; films, database, Python packages and cinematic-skill in
-`/home/studio/.documentary-studio/`. Back up `/home/studio/.documentary-studio/data`.
-
-<details><summary>Alternative: run with Docker instead</summary>
-
+**Updating later:** run `deploy.bat` on your PC (see [Development and deployments](#development-and-deployments)).
+Or, in cPanel Terminal, run the activation command shown at the top of the Setup Node.js App page (it starts with
+`source /home/USER/nodevenv/...`), then:
 ```bash
-curl -fsSL https://get.docker.com | sh
-cp .env.example .env && nano .env      # set DOMAIN, APP_PASSWORD, SECRET_KEY (openssl rand -hex 32)
-docker compose up -d --build
+cd ~/documentaryAI && git pull && npm install --omit=dev && mkdir -p tmp && touch tmp/restart.txt
 ```
-Update cinematic-skill with `docker compose build --no-cache studio && docker compose up -d`. Data lives in the
-`studio-data` Docker volume. Don't run the Docker setup and the native install on the same server at once.
-</details>
 
-### First-time setup in the app (Settings page)
+### Shared hosting tips
 
-1. **Channel**: name, style and audience notes, and the description footer.
-2. **AI models**: paste an API key for at least one provider, set the model, and click **Test connection**. Then pick
-   the default provider and model. The agent needs a model with tool/function calling. Strong models produce much
-   better films.
-3. **Narration voice**: choose OpenAI TTS or ElevenLabs for the final voice, then click **Test voice**.
-4. **Render server**: click **Run setup check** to confirm Python packages, ffmpeg and fonts.
-5. **YouTube** (for auto-upload):
-   - In [Google Cloud Console](https://console.cloud.google.com/), create a project and enable **YouTube Data API v3**.
-   - Set up the **OAuth consent screen** (External), and add your Google account as a **test user**.
-   - Create **Credentials → OAuth client ID → Web application**, with the redirect URI shown in Settings.
-     The app detects it automatically from where it's running. If you use the app both locally and on the
-     server, add both to the same client:
-     `https://your-domain/oauth/youtube/callback` and `http://localhost:8000/oauth/youtube/callback`.
-   - Paste the client ID and secret into Settings, save, and click **Connect YouTube channel**.
-   - Note: while the Google app is in "Testing" mode, refresh tokens expire after 7 days, so you'll need to reconnect.
-     Publishing the consent screen avoids that. Custom thumbnails need a phone-verified YouTube channel.
+- Rendering uses a lot of CPU. If your host slows the app down, add the environment variable `RENDER_THREADS=1`.
+  Make shorter films, or use 720p.
+- If **Run NPM Install** can't download ffmpeg, download a static ffmpeg build for Linux (x86_64), upload it to
+  the app folder, run `chmod +x ffmpeg`, and set the environment variable `FFMPEG_PATH=/home/USER/documentaryAI/ffmpeg`.
+- Films, settings and the database live in `documentaryAI/data/`. Back that folder up.
+- Fonts (OFL Google Fonts) download into `data/fonts` on the first start. If your host blocks that, copy `.ttf`
+  files into the `fonts/` folder.
+
+## Install on a VPS or your own PC
+
+Install **Node.js 18+** (on Ubuntu: `curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash - && sudo apt install -y nodejs`), then:
+```bash
+git clone https://github.com/DineshTechs/documentaryAI.git && cd documentaryAI
+cp .env.example .env      # set APP_PASSWORD and SECRET_KEY
+npm install
+npm start                 # http://localhost:3000
+```
+**On a VPS**, keep it running with pm2: `sudo npm i -g pm2 && pm2 start app.js --name studio && pm2 save && pm2 startup`.
+Put a web server with HTTPS in front of it, e.g. Caddy: `studio.yourchannel.in { reverse_proxy 127.0.0.1:3000 }`.
+
+**On Windows**, install Node.js from nodejs.org, then double-click `run_app.bat`.
+
+Run `npm run check` at any time for the same server check as in Settings.
+
+---
 
 ## Telegram bot
 
-1. In Telegram, message **@BotFather**, send `/newbot`, and copy the token it gives you.
-2. In the web app, go to **Settings → Telegram bot**, paste the token, tick **Enable bot**, set your timezone, and save.
-3. Tap **Open pairing link** (or send `/start CODE` to your bot). Only paired accounts can use the bot, and each
-   code works once. You can pair more accounts (e.g. an editor) and remove them in Settings.
+1. In Telegram, message **@BotFather**, send `/newbot`, and copy the token.
+2. Go to **Settings → Telegram bot**, paste the token, tick **Enable**, set your timezone, and save.
+3. Tap **Open pairing link** on your phone. Only paired accounts can use the bot, and each code works once.
 
-The bot uses long polling from your server, so it needs no webhook or extra port.
-
-**Notifications** (sent to every paired account):
-- ✋ approval requests with the summary, the beat table and stills attached, plus Approve / Request changes buttons
-- 💬 the agent waiting for an answer: just reply
-- ▸ stage changes, ⚠️ errors (with a Retry button), and 🎬 finished films with the video attached (up to 50 MB)
-- ✅ YouTube upload finished, or ⚠️ upload failed
-- Set Notifications to "Everything" to also get every agent message.
-
-**Commands** (most act on the *active* film, which you set with `/use 3`, or put the film number first: `/video 3`):
+When the app has an https address, the bot uses a **webhook**: Telegram calls your app, which wakes it up even on
+cPanel. Without https (on your PC) it uses polling.
 
 | Area | Commands |
 |---|---|
 | Films | `/films` · `/film 3` · `/use 3` · `/new Title \| topic \| 90 \| 16:9` · `/status` |
-| Agent | `/approve [note]` · `/changes what to change` · `/resume` · `/stop` · `/log [n]` · any plain message goes to the agent |
-| Files | `/files [filter]` · `/get film/beats.md` · `/video` · `/stills` · send photos, audio, voice notes or documents (≤ 20 MB) to add them to the film's `uploads/` |
-| YouTube | `/meta` (`/meta new` regenerates) · `/title …` · `/tags a, b` · `/privacy public` · `/schedule 2026-12-01 18:00` · `/thumb 4.5` · send a photo with the caption `thumbnail` · `/upload` |
+| Agent | `/approve [note]` · `/changes …` · `/resume` · `/stop` · `/log` · any plain message goes to the agent |
+| Files | `/files` · `/get film.json` · `/video` · `/stills` · send photos, audio, voice notes or documents to add them to the film |
+| YouTube | `/meta` · `/title …` · `/tags a, b` · `/privacy public` · `/schedule 2026-12-01 18:00` · `/thumb 4.5` · photo with caption `thumbnail` · `/upload` |
 | Planning | `/ideas` · `/idea Title \| notes` · `/brainstorm theme` · `/makefilm 5` · `/plan 5 2026-12-10` · `/calendar` |
 | AI | `/models` · `/model` · `/model openrouter some/model` · `/model default anthropic claude-sonnet-5-5` |
 
-Telegram limits: bots can send files up to 50 MB and receive files up to 20 MB. Bigger files go through the web app.
+Telegram lets bots send files up to 50 MB and receive files up to 20 MB. Bigger files go through the web app.
 
-## Run on your Windows PC (no Docker)
+## YouTube connection
 
-The app runs inside **WSL** (Windows Subsystem for Linux), the free Ubuntu built into Windows 10/11, using the same
-`install.sh` as the server.
+1. In [Google Cloud Console](https://console.cloud.google.com/), create a project and enable **YouTube Data API v3**.
+2. Set up the **OAuth consent screen** (External) and add your Google account as a **test user**.
+3. Create **Credentials → OAuth client ID → Web application**. Add the redirect URI shown in Settings (it's
+   detected automatically), e.g. `https://studio.yourchannel.in/oauth/youtube/callback`. If you run more than
+   one copy (staging, your PC), add each copy's URI to the same client.
+4. Paste the client ID and secret into Settings, save, and click **Connect YouTube channel**.
 
-1. Double-click **`run_app.bat`**.
-   - If WSL isn't installed, it offers to install it. After that, restart the PC, open **Ubuntu** from the Start menu
-     once to create a Linux username and password, then double-click `run_app.bat` again.
-   - The first run installs everything inside Ubuntu (5–15 minutes). It asks for your Linux password, then a password
-     for the web app.
-2. Your browser opens **http://localhost:8000**. Keep the window open while you work: closing it stops the app.
+While your Google app is in "Testing" mode, the login expires every 7 days. Publish the consent screen to avoid
+that. Custom thumbnails need a phone-verified YouTube channel.
+
+---
+
+## Development and deployments
+
+Run several copies, e.g. **staging** (for testing) and **main** (your live channel). On cPanel, each copy is its
+own **Setup Node.js App** with its own folder and subdomain:
+
+| Copy | Folder | URL | Git branch |
+|---|---|---|---|
+| main | `~/documentaryAI` | `studio.yourchannel.in` | `main` |
+| staging | `~/documentaryAI-staging` | `staging.yourchannel.in` | `develop` |
+
+Create the staging copy: `git clone -b develop https://github.com/DineshTechs/documentaryAI.git ~/documentaryAI-staging`,
+then repeat steps 2–5 above with that folder. Each copy has its own data, password, settings and Telegram bot.
+
+**On your PC (Windows):**
 
 | File | What it does |
 |---|---|
-| `run_app.bat` | Install (first time) and start the app via WSL |
-| `stop_app.bat` | Stop the app (WSL or Docker) |
-| `update_app.bat` | Update cinematic-skill and Python packages |
 | `git_push.bat` | Commit and push your current branch to GitHub |
 | `switch_branch.bat` | Switch between develop / main / a feature branch |
-| `deploy.bat [name]` | Update a copy on the server (e.g. `deploy.bat staging`) |
-| `release.bat` | Merge develop into main and put it live |
-| `run_app_docker.bat` | Optional: run with Docker Desktop instead of WSL |
+| `deploy.bat staging` / `deploy.bat main` | Update that copy on the server over SSH (git pull, npm install, restart) |
+| `release.bat` | Merge develop into main, push, and offer to deploy main |
+| `run_app.bat` | Optional: run the app on your PC (needs Node.js) |
 
-Films and settings are stored inside Ubuntu at `~/.documentary-studio/` (fast Linux disk), separate from the
-server's. On Mac or plain Linux, run `./install.sh` once, then `./run.sh`.
+The first time you run `deploy.bat`, it asks for your SSH login (e.g. `document1@yourserver`) and the folder of
+each copy. It saves them in `deploy.config`, which isn't pushed to GitHub. In cPanel, enable SSH under
+**SSH Access** (or ask your host).
 
-## Development and multiple deployments
+---
 
-Run several copies of the app on one server, e.g. **staging** for testing and **main** for your live channel. Each
-copy has its own folder, domain, password, port, films, settings, service and code branch, so testing never touches
-the live copy.
-
-```
- Your PC (WSL)              GitHub                      MilesWeb server
- ───────────────            ─────────────────           ─────────────────────────────────────────
- edit + test locally  ──►   develop branch  ──deploy──► staging   https://staging.yourchannel.in
- run_app.bat                     │ release.bat
-                                 ▼
-                            main branch     ──deploy──► main      https://studio.yourchannel.in
-```
-
-### One-time setup
-
-1. **Server, live copy:** install `main` as described in [Deploy on a cloud server](#deploy-on-a-cloud-server-no-docker).
-2. **PC:** double-click `switch_branch.bat`, choose **develop**, then `git_push.bat`. This creates the `develop`
-   branch on GitHub.
-3. **DNS:** add an A record for `staging.yourchannel.in` pointing to the same server IP.
-4. **Server, staging copy:**
-   ```bash
-   sudo bash /opt/documentary-studio/studio.sh new staging --domain staging.yourchannel.in --branch develop
-   ```
-   It asks for a separate password for the staging site and picks a free port automatically (8001, 8002, …).
-5. **PC:** the first time you run `deploy.bat`, it asks for your server login (e.g. `root@123.45.67.89`) and saves it
-   in `deploy.config`, which isn't pushed to GitHub.
-
-### Everyday flow
-
-| Step | On your PC |
-|---|---|
-| 1. Work on **develop** and test locally | `run_app.bat` (http://localhost:8000) |
-| 2. Save to GitHub | `git_push.bat` |
-| 3. Try it on the staging site | `deploy.bat staging` |
-| 4. Happy? Put it live | `release.bat` (merges develop → main, pushes, offers to deploy main) |
-| Hotfix or feature branch | `switch_branch.bat` → option 3 |
-
-`deploy.bat` warns you if you have changes that aren't pushed yet. When the target is `main`, it asks you to confirm.
-
-### Server commands (`studio.sh`)
-
-| Command | What it does |
-|---|---|
-| `sudo bash studio.sh list` | All copies: status, port, branch, URL, folder |
-| `sudo bash studio.sh new NAME --domain D --branch B [--port P]` | Add a copy (e.g. `test`, `client2`, `channel2`) |
-| `sudo bash studio.sh update NAME` / `update all` | Pull its branch from GitHub, update packages, restart |
-| `sudo bash studio.sh logs NAME` | Live logs |
-| `sudo bash studio.sh restart\|stop\|start NAME` | Control the service |
-| `sudo bash studio.sh remove NAME [--purge]` | Remove a copy (`--purge` also deletes its files and films) |
-
-Run these from `/opt/documentary-studio`. Every copy has its own `studio.sh` too.
-
-### Good to know
-
-- **Telegram:** each copy needs its **own bot** (make one per copy with @BotFather). Two copies can't share a token.
-- **YouTube:** add each copy's callback (`https://staging.…/oauth/youtube/callback`, `https://studio.…/oauth/…`) to
-  the same Google OAuth client. To avoid test uploads on your real channel, connect staging to a second channel, or
-  only upload as **private** from staging.
-- **AI keys and costs:** each copy has its own Settings, so you can give staging a cheaper model.
-- **CPU:** copies share the server, so two films rendering at once each take about twice as long. Stop staging when
-  you're not using it: `sudo bash studio.sh stop staging`.
-- **Private GitHub repo:** the server asks for your GitHub token on the first update of each copy, then remembers it.
-- Never edit code directly on the server. Changes there block updates (`update` will say so).
-
-## How the agent works
+## How it works
 
 ```
-Browser UI ──► Flask API ──► Agent thread (per film)
-                               │  system prompt = app rules + cinematic-skill SKILL.md
-                               │  tools: bash, read/write/edit file, list files, view_image,
-                               │         web_search, web_fetch, tts_generate,
-                               │         set_stage, request_approval, finish
-                               ▼
-                   /data/projects/<film>/  (film/ = cinematic-skill project, uploads/ = your files)
+Browser / Telegram ──► Node.js server (app.js) ──► Agent (per film) ──► tools:
+                                                     research · Wikimedia Commons · TTS · files ·
+                                                     check_film · stills · contact sheet · draft · final
+                                                         │
+                                                         ▼  (separate process)
+                                     Renderer: film.json → Skia frames → ffmpeg → MP4 + SRT + chapters
 ```
 
-- Each film has its own workspace. Commands run inside it, with `$SKILL_SCRIPTS` and `$FILM` set.
-- `request_approval` pauses the agent until you click Approve or Request changes.
-- The agent has a step limit per run (`AGENT_MAX_STEPS`, default 80). When it reaches the limit, click **Resume**.
-- To keep API costs down, older tool outputs are shortened and only the latest two reviewed images are sent to the
-  model.
-
-## Security notes
-
-- The agent can run shell commands on the machine, so keep `APP_PASSWORD` strong. On the server it runs as the
-  unprivileged `studio` user (or a non-root user in Docker), never as root.
-- API keys are stored in the SQLite database on your server, and the UI only shows their last 4 characters.
+- The agent writes **`film.json`**, a description of every scene, element, camera move and narration line.
+  The format is documented in [`src/GUIDE.md`](src/GUIDE.md), which is also the agent's instruction manual.
+- The agent never runs shell commands. It can only use the tools above, inside each film's folder.
+- Only one render runs at a time, so small servers aren't overloaded.
+- Each scene is encoded separately and cached, so an interrupted render picks up where it stopped.
 
 ## Project layout
 
 ```
-app/
-  main.py      Flask routes (projects, files, approvals, metadata, ideas, settings, OAuth)
-  agent.py     film-making agent: tools, loop, approvals, live command output
-  llm.py       multi-provider LLM client (Anthropic + OpenAI-compatible) with tool calling and images
-  tts.py       OpenAI TTS / ElevenLabs / espeak-ng
-  youtube.py   OAuth, resumable upload, captions, thumbnails, AI metadata
-  telegram_bot.py  Telegram commands, buttons, file transfer and push notifications
-  services.py  actions shared by the web API and the bot
-  db.py        SQLite storage
-static/        single-page UI (no build step)
-install.sh, run.sh, update.sh       native install / start / update (Ubuntu server, WSL, Mac/Linux)
-studio.sh                           manage several copies on one server (new, list, update, logs, remove)
-*.bat                               Windows helpers (WSL, Docker, git push)
-Dockerfile, docker-compose.yml, Caddyfile, .env.example   optional Docker setup
+app.js                 entry point (cPanel startup file)
+src/server.js          web server and API          src/agent.js       film-making agent + tools
+src/llm.js             AI providers                src/telegram.js    Telegram bot
+src/youtube.js         YouTube login/upload/meta   src/research.js    web, Wikipedia, Wikimedia Commons
+src/tts.js             narration voice             src/store.js       JSON storage (data/)
+src/GUIDE.md           film craft + film.json reference
+src/renderer/          the documentary renderer (looks, elements, timeline, audio, render, worker)
+static/                web interface (no build step)
 ```
 
-cinematic-skill is MIT-licensed © exploraX. Images fetched through it come from Wikimedia Commons, so keep the
-credits it generates in your video descriptions. The metadata generator does this automatically.
+The film style is inspired by the open-source [cinematic-skill](https://github.com/Moh4696/cinematic-skill)
+project (MIT); the renderer here is an independent Node.js implementation.

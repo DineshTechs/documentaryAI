@@ -2,7 +2,8 @@
 setlocal EnableExtensions
 title Deploy Documentary Studio
 cd /d "%~dp0"
-rem Updates a copy on your server from GitHub:   deploy.bat staging    deploy.bat main    deploy.bat all
+rem Update a copy of the app on your hosting over SSH:   deploy.bat staging    deploy.bat main
+rem It runs: git pull, npm install, restart. Settings are kept in deploy.config (not pushed to GitHub).
 
 where ssh >nul 2>&1
 if errorlevel 1 (
@@ -11,17 +12,23 @@ if errorlevel 1 (
   exit /b 1
 )
 
-rem ---- server details, saved in deploy.config - not pushed to GitHub
 set "SERVER="
-set "APP_DIR=/opt/documentary-studio"
-if exist "deploy.config" for /f "usebackq tokens=1,* delims==" %%a in ("deploy.config") do set "%%a=%%b"
+set "SSH_PORT=22"
+set "RESTART=mkdir -p tmp && touch tmp/restart.txt"
+if exist "deploy.config" for /f "usebackq eol=# tokens=1,* delims==" %%a in ("deploy.config") do set "%%a=%%b"
 if not "%SERVER%"=="" goto have_server
-echo First time: where is your server?
-set /p "SERVER=SSH login, e.g. root@123.45.67.89: "
+echo First time: how do you log in to your hosting with SSH?
+echo   cPanel: user name @ server, e.g. document1@velocity.yourhost.com  (cPanel - SSH Access shows it)
+set /p "SERVER=SSH login: "
 if "%SERVER%"=="" exit /b 1
+set /p "SSH_PORT=SSH port (press Enter for 22): "
+if "%SSH_PORT%"=="" set "SSH_PORT=22"
 > "deploy.config" (
+  echo # Documentary Studio deploy settings - private, not pushed to GitHub
   echo SERVER=%SERVER%
-  echo APP_DIR=%APP_DIR%
+  echo SSH_PORT=%SSH_PORT%
+  echo # Restart command. cPanel Node.js apps: mkdir -p tmp ^&^& touch tmp/restart.txt   VPS with pm2: pm2 restart studio
+  echo RESTART=mkdir -p tmp ^&^& touch tmp/restart.txt
 )
 echo Saved to deploy.config.
 :have_server
@@ -29,14 +36,24 @@ echo Saved to deploy.config.
 set "TARGET=%~1"
 if not "%TARGET%"=="" goto have_target
 echo.
-echo Copies on %SERVER%:
-ssh -t %SERVER% "sudo bash %APP_DIR%/studio.sh list"
-echo.
-set /p "TARGET=Which copy to update (e.g. staging, main, all): "
+echo Known copies:
+findstr /b "APP_" deploy.config 2>nul
+set /p "TARGET=Which copy to update (e.g. staging, main): "
 if "%TARGET%"=="" exit /b 1
 :have_target
 
-rem ---- unpushed work? Deploying only takes what is on GitHub.
+rem ---- folder of this copy on the server (asked once, then saved)
+set "APP="
+call set "APP=%%APP_%TARGET%%%"
+if not "%APP%"=="" goto have_app
+set "DEF=documentaryAI"
+if /i not "%TARGET%"=="main" set "DEF=documentaryAI-%TARGET%"
+set /p "APP=Folder of '%TARGET%' in your hosting home folder (Enter for %DEF%): "
+if "%APP%"=="" set "APP=%DEF%"
+>> "deploy.config" echo APP_%TARGET%=%APP%
+:have_app
+
+rem ---- unpushed work? The server only gets what is on GitHub.
 set "DIRTY="
 for /f %%s in ('git status --porcelain 2^>nul') do set "DIRTY=1"
 set "AHEAD=0"
@@ -61,12 +78,12 @@ if /i "%TARGET%"=="main" (
   if errorlevel 2 exit /b 1
 )
 echo.
-echo ==== Updating '%TARGET%' on %SERVER% ====
-ssh -t %SERVER% "sudo bash %APP_DIR%/studio.sh update %TARGET%"
+echo ==== Updating '%TARGET%' (~/%APP%) on %SERVER% ====
+ssh -t -p %SSH_PORT% %SERVER% "cd ~/%APP% && git pull --ff-only && for f in ~/nodevenv/%APP%/*/bin/activate; do [ -f $f ] && . $f; done; npm install --omit=dev --no-audit --no-fund && %RESTART% && echo && echo Deployed - the app restarts on its next visit."
 if errorlevel 1 (
   echo.
   echo [ERROR] The update reported a problem - read the messages above.
-  echo         Logs: ssh %SERVER% "sudo bash %APP_DIR%/studio.sh logs %TARGET%"
+  echo         If git says local changes would be overwritten, don't edit files on the server.
   pause
   exit /b 1
 )

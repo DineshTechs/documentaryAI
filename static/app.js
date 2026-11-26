@@ -5,7 +5,7 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const STAGES = ["story", "voice", "images", "scene", "review", "render", "done"];
-const LOOKS = { auto: "Auto (pick per subject)", documentary: "Cork evidence wall: documentary / history / true crime", studio: "Studio: product / brand", blueprint: "Blueprint: science / engineering", night: "Night: tech / space / trailers" };
+let LOOKS = { auto: "Auto (the AI picks per subject)" };
 const IDEA_COLS = [["idea", "Ideas"], ["research", "Research"], ["production", "In production"], ["scheduled", "Scheduled"], ["published", "Published"]];
 let META = null;
 let pollTimer = null;
@@ -102,9 +102,9 @@ function renderLogin() {
 function shell(active, inner) {
   const nav = [["films", "#/", "🎞", "Films"], ["ideas", "#/ideas", "🗂", "Ideas & calendar"], ["settings", "#/settings", "⚙", "Settings"]];
   $("#app").innerHTML = `<div class="shell"><aside class="side">
-    <div class="brand"><div class="reel"></div><div><b>Documentary<br>Studio</b><small>cinematic-skill</small></div></div>
+    <div class="brand"><div class="reel"></div><div><b>Documentary<br>Studio</b><small>documentary films</small></div></div>
     <nav class="nav">${nav.map(([k, h, ic, t]) => `<a href="${h}" class="${k === active ? "on" : ""}"><span>${ic}</span>${t}</a>`).join("")}</nav>
-    <div class="foot">${META && !META.skill_installed ? '<span style="color:#ef7c68">⚠ cinematic-skill not installed</span><br>' : ""}<a href="#" id="logout">Log out</a></div>
+    <div class="foot"><a href="#" id="logout">Log out</a></div>
   </aside><main class="main" id="main">${inner}</main></div>`;
   $("#logout").onclick = async (e) => { e.preventDefault(); await api("/api/logout", { method: "POST" }); renderLogin(); };
   return $("#main");
@@ -118,7 +118,7 @@ async function route() {
   try {
     const h = await api("/api/health");
     if (!h.logged_in) return renderLogin();
-    if (!META) META = await api("/api/meta");
+    if (!META) { META = await api("/api/meta"); LOOKS = { auto: "Auto (the AI picks per subject)", ...(META.looks || {}) }; }
   } catch (e) { return; }
   const hash = location.hash.replace(/^#/, "") || "/";
   const [path] = hash.split("?");
@@ -137,7 +137,7 @@ function miniSteps(stage) {
 }
 
 async function viewFilms() {
-  const main = shell("films", `<div class="top"><div class="grow"><h1>Films</h1><div class="sub">Each film runs the cinematic-skill pipeline: story → voice → images → scene → review → render.</div></div>
+  const main = shell("films", `<div class="top"><div class="grow"><h1>Films</h1><div class="sub">Each film goes through story → voice → images → scene → review → render, with your approval at each key step.</div></div>
     <button class="primary" id="new">＋ New film</button></div><div id="body"><div class="spin"></div></div>`);
   $("#new").onclick = () => newFilmModal();
   const list = await api("/api/projects");
@@ -271,6 +271,7 @@ function eventHtml(ev) {
     case "user": return `<div class="ev user">${t}</div>`;
     case "tool": return `<div class="ev tool" data-tool="${ev.id}"><b>${esc(ev.meta?.name || "tool")}</b> ${t.length > 220 ? t.slice(0, 220) + "…" : t}<pre class="out">…</pre></div>`;
     case "tool_result": return null;
+    case "waiting": return null;
     case "image": return `<div class="ev image"><div class="hint">Agent reviewed ${t}</div><img loading="lazy" src="${rawUrl(PV.pid, ev.text)}" data-open="${t}"></div>`;
     case "stage": return `<div class="ev stage">— ${t} stage —</div>`;
     case "approval": return `<div class="ev system">✋ Asked for approval: ${t}</div>`;
@@ -424,13 +425,17 @@ function tabPreview(el) {
   const stills = PV.files.filter((f) => isImg(f.path) && !f.path.startsWith("uploads/") && /still|contact|strip|review|frame|preview|out\//i.test(f.path)).sort((a, b) => b.mtime - a.mtime).slice(0, 24);
   if (!PV.files.length) { refreshFiles(); }
   const main = p.final_video || (vids[0] && vids[0].path);
-  el.innerHTML = main ? `<div class="viewer" style="margin:0"><video controls id="pv" src="${rawUrl(p.id, main)}"></video>
+  const renderBar = `<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap"><button class="sm" id="r-draft" ${p.running ? "disabled" : ""}>Render 30 s draft</button><button class="sm" id="r-final" ${p.running ? "disabled" : ""}>Render final film</button><span class="hint">Renders film.json as it is now, without the agent.</span></div>`;
+  el.innerHTML = renderBar + (main ? `<div class="viewer" style="margin:0"><video controls id="pv" src="${rawUrl(p.id, main)}"></video>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px"><code>${esc(main)}</code>
       <span><a class="btn sm" href="${rawUrl(p.id, main, true)}">⬇ MP4</a> ${p.final_srt ? `<a class="btn sm" href="${rawUrl(p.id, p.final_srt, true)}">⬇ SRT</a>` : ""}</span></div></div>`
-    : `<div class="empty" style="padding:30px">No video rendered yet. Drafts and the final film show up here.</div>`;
+    : `<div class="empty" style="padding:30px">No video rendered yet. Drafts and the final film show up here.</div>`);
   if (vids.length > 1) el.innerHTML += `<h3 style="margin-top:18px">All renders</h3><div class="chips">${vids.map((v) => `<span class="chip" data-v="${esc(v.path)}">${esc(v.path)} · ${ago(v.mtime)}</span>`).join("")}</div>`;
   if (stills.length) el.innerHTML += `<h3 style="margin-top:18px">Review stills</h3><div class="thumbs">${stills.map((s) => fileThumb(p.id, s.path)).join("")}</div>`;
   $$("[data-v]", el).forEach((c) => (c.onclick = () => { $("#pv").src = rawUrl(p.id, c.dataset.v); }));
+  const manual = (q) => (e) => act(e.target, async () => { await api(`/api/projects/${p.id}/render`, { method: "POST", body: { quality: q } }); toast("Rendering… progress shows in the Agent panel"); });
+  if ($("#r-draft", el)) $("#r-draft", el).onclick = manual("draft");
+  if ($("#r-final", el)) $("#r-final", el).onclick = manual("final");
   $$("[data-open]", el).forEach((b) => (b.onclick = () => openFile(b.dataset.open)));
 }
 
@@ -630,7 +635,7 @@ async function viewSettings() {
       <button class="sm" data-test="${k}" style="margin-top:10px">Test connection</button></details>`; }).join("")}</div></div>
 
   <div class="card"><h2>Narration voice</h2>
-    <div class="row"><div><label>Final voice provider</label><select id="t-prov">${Object.entries(META.tts_providers).map(([k, v]) => `<option value="${k}" ${k === (tts.provider || "espeak") ? "selected" : ""}>${v}</option>`).join("")}</select></div><div></div></div>
+    <div class="row"><div><label>Final voice provider</label><select id="t-prov">${Object.entries(META.tts_providers).map(([k, v]) => `<option value="${k}" ${k === (tts.provider || "none") ? "selected" : ""}>${v}</option>`).join("")}</select></div><div></div></div>
     <div class="row"><div><label>OpenAI TTS key (blank = use OpenAI key above)</label><input id="t-okey" type="password" value="${esc(tts.openai_key || "")}"></div><div><label>OpenAI voice</label><input id="t-ovoice" value="${esc(tts.openai_voice || "onyx")}" placeholder="onyx, ash, sage, ballad…"></div><div><label>OpenAI TTS model</label><input id="t-omodel" value="${esc(tts.openai_model || "gpt-4o-mini-tts")}"></div></div>
     <label>OpenAI voice direction (optional)</label><input id="t-oinst" value="${esc(tts.openai_instructions || "")}" placeholder="Deep, measured documentary narrator. Slow, with suspense.">
     <div class="row"><div><label>ElevenLabs key</label><input id="t-ekey" type="password" value="${esc(tts.elevenlabs_key || "")}"></div><div><label>ElevenLabs voice ID</label><input id="t-evoice" value="${esc(tts.elevenlabs_voice || "")}"></div><div><label>ElevenLabs model</label><input id="t-emodel" value="${esc(tts.elevenlabs_model || "eleven_multilingual_v2")}"></div></div>
@@ -640,8 +645,9 @@ async function viewSettings() {
   <div class="card"><h2>Research</h2><label>Brave Search API key (optional; without it the agent searches Wikipedia only)</label><input id="s-brave" type="password" value="${esc(se.brave_key || "")}"></div>
 
   <div class="card"><h2>YouTube</h2>
-    <p class="hint">1. In Google Cloud Console, create a project and enable the <b>YouTube Data API v3</b>. 2. Set up the OAuth consent screen and add yourself as a test user. 3. Create an OAuth client ID of type <b>Web application</b> with this redirect URI:</p>
+    <p class="hint">1. In Google Cloud Console, create a project and enable the <b>YouTube Data API v3</b>. 2. Set up the OAuth consent screen and add yourself as a test user. 3. Create an OAuth client ID of type <b>Web application</b> and add the redirect URI below. It's detected automatically from where this app is running right now. If you use the app both locally and on your server, add <b>both</b> URIs to the same client: Google only accepts addresses you've registered.</p>
     <pre class="live">${esc(ytStatus.redirect_uri)}</pre>
+    ${/^http:\/\/(?!localhost|127\.0\.0\.1)/.test(ytStatus.redirect_uri) ? '<div class="hint" style="color:#ef7c68">Google needs https for any address other than localhost. Open the app through your domain (https://…) to connect YouTube.</div>' : ""}
     <div class="row"><div><label>OAuth client ID</label><input id="y-id" value="${esc(yt.client_id || "")}"></div><div><label>OAuth client secret</label><input id="y-secret" type="password" value="${esc(yt.client_secret || "")}"></div></div>
     <div style="margin-top:12px;display:flex;gap:8px;align-items:center">${ytStatus.connected ? `<span class="pill done">connected</span> <b>${esc(ytStatus.channel || "")}</b> <button class="sm danger" id="y-dis">Disconnect</button>` : `<button class="primary sm" id="y-con">Connect YouTube channel (save first)</button>`}</div></div>
 
@@ -653,7 +659,7 @@ async function viewSettings() {
       <div><label>&nbsp;</label><label style="display:flex;gap:8px;align-items:center;margin:8px 0 0"><input type="checkbox" id="tg-on" style="width:auto" ${tg.enabled ? "checked" : ""}> Enable bot</label></div></div>
     <div id="tg-status" style="margin-top:12px" class="hint">Loading status…</div></div>
 
-  <div class="card"><h2>Render server</h2><p class="hint">Runs cinematic-skill's <code>check_setup.py</code> (Python packages, ffmpeg, fonts).</p><button class="sm" id="chk">Run setup check</button><pre class="live" id="chk-out" style="display:none"></pre></div>`;
+  <div class="card"><h2>Server check</h2><p class="hint">Checks Node.js, the graphics engine, ffmpeg and fonts, then renders a 3-second test video to measure how fast this server makes films.</p><button class="sm" id="chk">Run setup check</button><pre class="live" id="chk-out" style="display:none"></pre></div>`;
 
   const collect = () => {
     const providers = {};
@@ -686,7 +692,7 @@ async function drawTelegram(saveAll, again) {
   const t = await api("/api/telegram").catch(() => null);
   if (!t) return;
   box.innerHTML = `<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      ${t.running ? `<span class="pill done">running</span> <b>@${esc(t.username)}</b>` : `<span class="pill stopped">not running</span>`}
+      ${t.running ? `<span class="pill done">running</span> <b>@${esc(t.username)}</b> <span class="hint">(${t.mode === "webhook" ? "webhook: works even when the app sleeps" : "polling"})</span>` : `<span class="pill stopped">not running</span>`}
       ${t.error ? `<span style="color:#ef7c68">${esc(t.error)}</span>` : ""}</div>
     ${t.running ? `<label>Pair your Telegram account</label>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><a class="btn primary" href="${esc(t.link)}" target="_blank">Open pairing link</a>

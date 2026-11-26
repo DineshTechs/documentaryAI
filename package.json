@@ -1,0 +1,17 @@
+{
+  "name": "documentary-studio",
+  "version": "2.0.0",
+  "description": "Documentary Studio: AI documentary films for YouTube, rendered in Node.js (no Docker, no root needed)",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "check": "node src/check.js"
+  },
+  "engines": { "node": ">=18.17" },
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.100",
+    "ffmpeg-static": "^5.2.0"
+  },
+  "license": "MIT",
+  "private": true
+}

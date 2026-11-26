@@ -60,8 +60,6 @@ if "%MSG%"=="" set "MSG=Update %date% %time:~0,5%"
 rem ---- stage everything (.gitignore keeps .env, .env.local, .env.native, deploy.config and data out)
 git add -A
 if errorlevel 1 goto fail
-rem keep the Linux scripts executable for the server (Windows doesn't track this)
-git update-index --chmod=+x install.sh run.sh update.sh studio.sh >nul 2>&1
 
 rem ---- safety net: never push secrets
 git diff --cached --name-only | findstr /r /i /c:"^\.env$" /c:"^\.env\.local$" /c:"^\.env\.native$" /c:"^deploy\.config$" /c:"\.db$" >nul
