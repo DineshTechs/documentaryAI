@@ -10,7 +10,8 @@
   "engines": { "node": ">=18.17" },
   "dependencies": {
     "@napi-rs/canvas": "^0.1.100",
-    "ffmpeg-static": "^5.2.0"
+    "ffmpeg-static": "^5.2.0",
+    "mongodb": "^6.10.0"
   },
   "license": "MIT",
   "private": true

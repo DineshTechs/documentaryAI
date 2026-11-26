@@ -14,6 +14,10 @@ async function setupCheck({ render = true } = {}) {
   (maj >= 18 ? good : bad)(`Node.js ${process.versions.node}${maj >= 18 ? '' : ' - version 18 or newer is required'}`);
   lines.push(`  CPU cores: ${os.cpus().length}, memory: ${Math.round(os.totalmem() / 1e9)} GB, data folder: ${config.DATA_DIR}`);
   try { fs.accessSync(config.DATA_DIR, fs.constants.W_OK); good('Data folder is writable'); } catch (_) { bad(`Cannot write to ${config.DATA_DIR}`); }
+  const st = require('./store').status();
+  if (st.backend === 'mongodb' && st.ok) good(`Database: MongoDB connected (database "${st.db}")`);
+  else if (st.backend === 'files') good('Database: local files in the data folder (set MONGODB_URI to use MongoDB)');
+  else bad(`Database: MongoDB problem - ${st.error}. Check MONGODB_URI, the password, and Network Access in MongoDB Atlas (allow your server's IP).`);
   try {
     require('@napi-rs/canvas');
     good('Graphics engine (@napi-rs/canvas, Skia) loaded');

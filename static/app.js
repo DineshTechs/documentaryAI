@@ -639,7 +639,15 @@ async function viewSettings() {
     <div class="row"><div><label>OpenAI TTS key (blank = use OpenAI key above)</label><input id="t-okey" type="password" value="${esc(tts.openai_key || "")}"></div><div><label>OpenAI voice</label><input id="t-ovoice" value="${esc(tts.openai_voice || "onyx")}" placeholder="onyx, ash, sage, ballad…"></div><div><label>OpenAI TTS model</label><input id="t-omodel" value="${esc(tts.openai_model || "gpt-4o-mini-tts")}"></div></div>
     <label>OpenAI voice direction (optional)</label><input id="t-oinst" value="${esc(tts.openai_instructions || "")}" placeholder="Deep, measured documentary narrator. Slow, with suspense.">
     <div class="row"><div><label>ElevenLabs key</label><input id="t-ekey" type="password" value="${esc(tts.elevenlabs_key || "")}"></div><div><label>ElevenLabs voice ID</label><input id="t-evoice" value="${esc(tts.elevenlabs_voice || "")}"></div><div><label>ElevenLabs model</label><input id="t-emodel" value="${esc(tts.elevenlabs_model || "eleven_multilingual_v2")}"></div></div>
-    <p class="hint">You can always upload your own voice recording on a film's Files tab instead.</p>
+    <h3 style="margin-top:18px">AI Awaaz</h3>
+    <p class="hint">Indian voices in Hindi, English and 20+ languages. In app.aiawaaz.io open <b>Connect your AI tool</b>, create an API key, and paste it here. The app talks to AI Awaaz's MCP endpoint itself; you don't need Claude Desktop.</p>
+    <div class="row"><div><label>AI Awaaz API key</label><input id="t-akey" type="password" value="${esc(tts.aiawaaz_key || "")}" placeholder="paste key"></div>
+      <div><label>Voice (ID or name from "List voices")</label><input id="t-avoice" value="${esc(tts.aiawaaz_voice || "")}" placeholder="e.g. Bunty"></div></div>
+    <div class="row"><div><label>Extra options (JSON, optional)</label><input id="t-aopts" value="${esc(tts.aiawaaz_options || "")}" placeholder='e.g. {"speed": 0.95}'></div>
+      <div><label>&nbsp;</label><label style="display:flex;gap:8px;align-items:center;margin:8px 0 0"><input type="checkbox" id="t-aenh" style="width:auto" ${tts.aiawaaz_enhance ? "checked" : ""}> Add emotions and pauses (enhance_for_v3, V3 voices)</label></div></div>
+    <div style="display:flex;gap:8px;margin-top:10px"><button class="sm" id="t-avoices">List voices (save first)</button><button class="sm" id="t-aacct">Show plan & characters left</button></div>
+    <pre class="live" id="t-aout" style="display:none;max-height:320px"></pre>
+    <p class="hint" style="margin-top:12px"><b>Upload</b> option: for any other voice app or your own recording, the agent writes <code>voiceover_script.txt</code>, you export one MP3 and upload it on the film's Files tab (or send it to the Telegram bot), and the agent splits it into lines.</p>
     <button class="sm" id="t-test">▶ Test voice (save first)</button> <audio id="t-audio" controls style="display:none;vertical-align:middle;height:32px"></audio></div>
 
   <div class="card"><h2>Research</h2><label>Brave Search API key (optional; without it the agent searches Wikipedia only)</label><input id="s-brave" type="password" value="${esc(se.brave_key || "")}"></div>
@@ -667,7 +675,8 @@ async function viewSettings() {
     return { providers, default_llm: { provider: $("#d-prov").value, model: $("#d-model").value.trim() },
       channel: { name: $("#c-name").value, language: $("#c-lang").value, style: $("#c-style").value, footer: $("#c-footer").value },
       tts: { provider: $("#t-prov").value, openai_key: $("#t-okey").value, openai_voice: $("#t-ovoice").value, openai_model: $("#t-omodel").value, openai_instructions: $("#t-oinst").value,
-        elevenlabs_key: $("#t-ekey").value, elevenlabs_voice: $("#t-evoice").value, elevenlabs_model: $("#t-emodel").value },
+        elevenlabs_key: $("#t-ekey").value, elevenlabs_voice: $("#t-evoice").value, elevenlabs_model: $("#t-emodel").value,
+        aiawaaz_key: $("#t-akey").value.trim(), aiawaaz_voice: $("#t-avoice").value.trim(), aiawaaz_options: $("#t-aopts").value.trim(), aiawaaz_enhance: $("#t-aenh").checked },
       telegram: { bot_token: $("#tg-token").value.trim(), enabled: $("#tg-on").checked, timezone: $("#tg-tz").value.trim() || "UTC", notify: $("#tg-notify").value },
       search: { brave_key: $("#s-brave").value }, youtube: { client_id: $("#y-id").value.trim(), client_secret: $("#y-secret").value.trim() } };
   };
@@ -679,6 +688,9 @@ async function viewSettings() {
     const r = await api("/api/settings/test-llm", { method: "POST", body: { provider: k, model } });
     toast(`✓ ${META.providers[k].label} replied: ${r.reply}`);
   })));
+  const awaaz = (what) => (e) => act(e.target, async () => { await saveAll(); const r = await api(`/api/tts/aiawaaz/${what}`); const o = $("#t-aout"); o.style.display = ""; o.textContent = r.text || "(empty)"; });
+  $("#t-avoices").onclick = awaaz("voices");
+  $("#t-aacct").onclick = awaaz("account");
   $("#t-test").onclick = (e) => act(e.target, async () => { await saveAll(); const blob = await api("/api/settings/test-tts", { method: "POST" }); const a = $("#t-audio"); a.src = URL.createObjectURL(blob); a.style.display = ""; a.play(); });
   if ($("#y-con")) $("#y-con").onclick = (e) => act(e.target, async () => { await saveAll(); const r = await api("/api/youtube/connect"); location.href = r.url; });
   if ($("#y-dis")) $("#y-dis").onclick = (e) => act(e.target, async () => { if (!confirm("Disconnect YouTube?")) return; await api("/api/youtube/disconnect", { method: "POST" }); viewSettings(); });

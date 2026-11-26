@@ -19,8 +19,6 @@ const STATIC = path.join(config.ROOT, 'static');
 const r = new Router();
 const SESSION = 'ds_session';
 
-// Agents don't survive a restart; mark them so the UI offers "Resume".
-for (const p of store.projects()) if (p.status === 'running') store.updateProject(p.id, { status: 'stopped' });
 
 const loggedIn = (req) => !config.APP_PASSWORD || (readCookie(req, SESSION) || {}).ok === true;
 const projectOr404 = (id) => { const p = store.getProject(id); if (!p) throw new HttpError(404, 'Film not found'); return p; };
@@ -87,10 +85,16 @@ r.post('/api/settings/test-llm', async (req, res) => {
   json(res, { ok: true, reply: await llm.test(b.provider, b.model) });
 });
 r.post('/api/settings/test-tts', async (req, res) => {
+  const prov = (tts.settings().provider) || 'none';
+  if (tts.UPLOAD_PROVIDERS.has(prov)) throw new HttpError(400, 'With this option you upload your own voice-over MP3 to each film, so there is nothing to test here.');
   const out = path.join(config.DATA_DIR, '_tts_test.mp3');
   const t = await tts.synthesize('This is a test of the narration voice for your documentary.', out);
   if (!t.ok) throw new HttpError(400, t.note);
   sendFile(req, res, out);
+});
+r.get('/api/tts/aiawaaz/:what', async (req, res, { what }) => {
+  if (!['voices', 'account'].includes(what)) throw new HttpError(404, 'Not found');
+  json(res, { text: await tts.aiawaazInfo(what) });
 });
 r.get('/api/meta', (req, res) => json(res, {
   providers: Object.fromEntries(Object.entries(llm.PROVIDERS).map(([k, v]) => [k, { label: v.label, base_url: v.base_url, model_hint: v.model_hint }])),
@@ -334,6 +338,20 @@ async function handle(req, res) {
 
 function listen(port = config.PORT, host = config.HOST) {
   const server = http.createServer(handle);
+  // connect the database first (MongoDB or local files), then start serving
+  const ready = store.init().then((st) => {
+    console.log(`Database: ${st.backend}${st.db && st.backend === 'mongodb' ? ` (${st.db})` : ''}${st.error ? ` - ${st.error}` : ''}`);
+    // agents don't survive a restart; mark them so the UI offers "Resume"
+    for (const p of store.projects()) if (p.status === 'running') store.updateProject(p.id, { status: 'stopped' });
+    start();
+  });
+  const shutdown = () => { store.close().catch(() => {}).finally(() => process.exit(0)); setTimeout(() => process.exit(0), 5000).unref(); };
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
+  server.ready = ready;
+  return server;
+
+  function start() {
   server.requestTimeout = 0;
   server.headersTimeout = 120000;
   server.listen(port, host, () => console.log(`Documentary Studio running on http://localhost:${port}`));
@@ -346,7 +364,7 @@ function listen(port = config.PORT, host = config.HOST) {
     const busy = store.projects().some((p) => agent.isRunning(p.id)) || store.allMeta().some((m) => m.upload_status && !/^(done|error)/.test(m.upload_status));
     if (busy) fetch(`${youtube.publicUrl()}/api/health?keepalive=1`, { signal: AbortSignal.timeout(20000) }).catch(() => {});
   }, 60000).unref();
-  return server;
+  }
 }
 
 module.exports = { handle, listen, brainstorm };

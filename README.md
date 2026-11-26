@@ -22,7 +22,9 @@ straight to YouTube.
   - Scenes are cached, so re-rendering after a small change only re-renders the scenes that changed.
 - **Any AI provider**: Claude, OpenAI, Gemini, OpenRouter, DeepSeek, Groq, Mistral, xAI, or OpenAI-compatible
   (Ollama, LM Studio). Set one default and switch per film.
-- **Voice**: OpenAI TTS or ElevenLabs, or upload your own recording (the agent splits it into lines).
+- **Voice**: **AI Awaaz** (Indian voices, Hindi + 20 languages, via its MCP endpoint), OpenAI TTS or ElevenLabs,
+  all automatic. Or upload a voice-over from any other app or your own recording; the agent splits it into
+  narration lines at the pauses.
 - **Research**: Wikipedia and web pages, plus optional Brave Search. Images come from **Wikimedia Commons**
   (free licences only), and credits are recorded automatically.
 - **YouTube**: AI titles, description with chapters and credits, tags, and thumbnail ideas. Pick a video frame as
@@ -66,7 +68,7 @@ Your hosting needs **"Setup Node.js App"** in cPanel (Node 18 or newer) and **Te
 6. In **Settings**:
    1. **Server check**: renders a test clip and shows how fast this server makes films.
    2. **AI models**: add a key (e.g. Anthropic), set the default provider and model, then click **Test**.
-   3. **Narration voice**: OpenAI TTS or ElevenLabs, then click **Test voice**.
+   3. **Narration voice**: AI Awaaz, OpenAI TTS or ElevenLabs, then click **Test voice**.
    4. **Telegram** and **YouTube** whenever you like (below).
 
 7. **Recommended: keep the app awake.** cPanel puts idle apps to sleep. The app keeps itself awake while it's
@@ -129,6 +131,18 @@ cPanel. Without https (on your PC) it uses polling.
 | AI | `/models` · `/model` · `/model openrouter some/model` · `/model default anthropic claude-sonnet-5-5` |
 
 Telegram lets bots send files up to 50 MB and receive files up to 20 MB. Bigger files go through the web app.
+
+## AI Awaaz voices
+
+1. In [app.aiawaaz.io](https://app.aiawaaz.io), open **Connect your AI tool** and create an API key.
+2. In **Settings → Narration voice**, choose **AI Awaaz**, paste the key, and save.
+3. Click **List voices**, copy the ID or name of the voice you want into **Voice**, and save.
+4. Optional: tick **Add emotions and pauses** (uses `enhance_for_v3`, for V3 voices). Add extra options as JSON,
+   e.g. `{"speed": 0.95}`.
+5. Click **Test voice**. **Show plan & characters left** shows your remaining characters.
+
+The app calls AI Awaaz's MCP endpoint (`https://app.aiawaaz.io/api/mcp`) directly, so you don't need Claude
+Desktop or Claude Code. Every narration line uses your AI Awaaz characters (up to 5,000 per line on V3).
 
 ## YouTube connection
 
