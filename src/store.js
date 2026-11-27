@@ -43,8 +43,16 @@ loadFiles();
 
 // ---------------------------------------------------------------- persistence: files
 let saveTimer = null;
+const localSettings = new Set(); // settings this copy changed since its last write (file mode)
+function mergeDiskSettings() {
+  // take settings another copy of the app saved, except the ones we changed ourselves
+  try {
+    const disk = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+    for (const [k, v] of Object.entries((disk && disk.settings) || {})) if (!localSettings.has(k)) db.settings[k] = v;
+  } catch (_) { /* no file yet */ }
+}
 function fileSave(nowFlag) {
-  const write = () => atomicWrite(DB_FILE, JSON.stringify(db, null, 1));
+  const write = () => { mergeDiskSettings(); localSettings.clear(); atomicWrite(DB_FILE, JSON.stringify(db, null, 1)); };
   if (nowFlag) { if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; } write(); return; }
   if (!saveTimer) saveTimer = setTimeout(() => { saveTimer = null; write(); }, 150);
 }
@@ -57,7 +65,7 @@ const pendingEvents = [];
 let flushTimer = null, flushing = null;
 
 function markDirty(kind, id) {
-  if (mode !== 'mongo') { if (kind !== 'messages') fileSave(); return; }
+  if (mode !== 'mongo') { if (kind === 'settings') localSettings.add(id); if (kind !== 'messages') fileSave(); return; }
   if (kind === 'seq') dirty.seq = true; else dirty[kind].add(id);
   scheduleFlush();
 }
@@ -194,6 +202,24 @@ async function close() { if (mode === 'mongo') { await flush(); await mongo.clie
 function save(nowFlag = false) { if (mode === 'file') fileSave(nowFlag); }
 
 // ---------------------------------------------------------------- settings
+// Hosting like cPanel/Passenger can run several copies of the app against the same database. Each copy keeps
+// settings in memory, so re-read them from the database (cheap: a few small documents) to see the other copies' saves.
+let fileSettingsMtime = 0;
+async function reloadSettings() {
+  try {
+    if (mode === 'mongo') {
+      const rows = await mongo.db.collection('settings').find({}).toArray();
+      for (const r of rows) if (!dirty.settings.has(r._id)) db.settings[r._id] = r.value; // keep our own unsaved changes
+    } else {
+      const st = fs.statSync(DB_FILE);
+      if (st.mtimeMs <= fileSettingsMtime) return;
+      fileSettingsMtime = st.mtimeMs;
+      mergeDiskSettings();
+    }
+  } catch (_) { /* keep what we have */ }
+}
+setInterval(() => reloadSettings(), 15000).unref();
+
 const getSetting = (k, def = null) => (k in db.settings ? db.settings[k] : def);
 function setSetting(k, v) { db.settings[k] = v; markDirty('settings', k); }
 
@@ -273,6 +299,19 @@ function addEvent(pid, kind, text = '', meta = null) {
   for (const fn of listeners) { try { fn(ev); } catch (_) { /* listener errors don't matter */ } }
   return ev;
 }
+// Wipe a film's activity log (pid) or every film's log (no pid). The agent's memory and the files are not touched.
+function clearEvents(pid = null) {
+  const ids = pid == null ? [...new Set([...db.projects.map((p) => p.id), ...evCache.keys()])] : [Number(pid)];
+  for (const id of ids) {
+    evCache.set(id, []);
+    fs.rmSync(path.join(EV_DIR, `${id}.jsonl`), { force: true });
+  }
+  if (mode === 'mongo') {
+    for (let i = pendingEvents.length - 1; i >= 0; i--) if (pid == null || pendingEvents[i].project_id === Number(pid)) pendingEvents.splice(i, 1);
+    return mongo.db.collection('events').deleteMany(pid == null ? {} : { project_id: Number(pid) }).then(() => ids.length);
+  }
+  return Promise.resolve(ids.length);
+}
 const eventsAfter = (pid, after, limit = 500) => getEvents(pid).filter((e) => e.id > after).slice(0, limit);
 const onEvent = (fn) => listeners.add(fn);
 const lastEventId = () => db.seq.event;
@@ -298,7 +337,7 @@ function getMeta(pid) {
   pid = Number(pid);
   if (!db.metadata[pid]) {
     db.metadata[pid] = { project_id: pid, title: '', description: '', tags: [], chapters: [], title_options: [], thumbnail_ideas: [],
-      category_id: '27', privacy: 'private', publish_at: '', language: 'en', thumbnail_path: null, youtube_id: null,
+      category_id: '27', privacy: 'private', publish_at: '', language: '', thumbnail_path: null, youtube_id: null,
       upload_status: null, upload_progress: 0, upload_error: null };
     markDirty('metadata', pid);
   }
@@ -308,10 +347,10 @@ function saveMeta(pid, fields) { Object.assign(getMeta(pid), fields); markDirty(
 const allMeta = () => Object.values(db.metadata);
 
 module.exports = {
-  init, status, close, flush, save, getSetting, setSetting,
+  init, status, close, flush, save, getSetting, setSetting, reloadSettings,
   projects, getProject, addProject, updateProject, deleteProject,
   getMessages, addMessage, clearMessages,
-  addEvent, eventsAfter, onEvent, lastEventId, getEvents,
+  addEvent, eventsAfter, onEvent, lastEventId, getEvents, clearEvents,
   ideas, getIdea, addIdea, updateIdea, deleteIdea,
   getMeta, saveMeta, allMeta,
 };

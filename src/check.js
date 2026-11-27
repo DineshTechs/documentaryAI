@@ -27,7 +27,7 @@ async function setupCheck({ render = true } = {}) {
   const fonts = require('./renderer/fonts');
   fonts.ensureRegistered(config.FONTS_DIR);
   const fams = fonts.families();
-  const want = ['Special Elite', 'Oswald', 'Libre Baskerville', 'Caveat', 'Inter'];
+  const want = ['Special Elite', 'Oswald', 'Crimson Text', 'Playfair Display', 'Caveat', 'Inter', 'Hind'];
   const have = want.filter((f) => fams.includes(f));
   (have.length >= 3 ? good : (s) => lines.push(`! ${s}`))(`Fonts: ${have.length}/${want.length} film fonts installed (${have.join(', ') || 'none yet'}); ${fams.length} fonts in total`);
   if (render) {

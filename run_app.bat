@@ -12,8 +12,11 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if not exist "node_modules\@napi-rs\canvas" (
-  echo Installing packages - first time only, takes a minute...
+set "NEED_INSTALL="
+if not exist "node_modules\@napi-rs\canvas" set "NEED_INSTALL=1"
+if not exist "node_modules\mongodb" set "NEED_INSTALL=1"
+if defined NEED_INSTALL (
+  echo Installing packages - takes a minute...
   call npm install --omit=dev --no-audit --no-fund
   if errorlevel 1 (
     echo [ERROR] npm install failed - read the messages above.
@@ -36,9 +39,34 @@ for /f "delims=" %%k in ('powershell -NoProfile -Command "[guid]::NewGuid().ToSt
 )
 :env_ok
 
-start "" /min cmd /c "timeout /t 4 /nobreak >nul & start http://localhost:3000"
+rem ---- port from .env (default 3000)
+set "PORT=3000"
+for /f "usebackq tokens=1,* delims==" %%a in (".env") do if /i "%%a"=="PORT" set "PORT=%%b"
+set "PORT=%PORT: =%"
+
+rem ---- is something already using the port?
+set "OLDPID="
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr /r /c:":%PORT% .*LISTENING"') do if not defined OLDPID set "OLDPID=%%p"
+if not defined OLDPID goto port_free
+powershell -NoProfile -Command "try { $r = Invoke-RestMethod -TimeoutSec 3 http://127.0.0.1:%PORT%/api/health; if ($r.app -eq 'documentary-studio' -or $r.PSObject.Properties.Name -contains 'logged_in') { exit 0 } else { exit 1 } } catch { exit 1 }"
+if errorlevel 1 goto port_other
+echo An older copy of Documentary Studio is still running on port %PORT% - stopping it...
+taskkill /PID %OLDPID% /T /F >nul 2>&1
+timeout /t 2 /nobreak >nul
+goto port_free
+:port_other
 echo.
-echo  Documentary Studio: http://localhost:3000   -  close this window to stop it.
+echo [!] Port %PORT% is used by another program (process ID %OLDPID%).
+tasklist /FI "PID eq %OLDPID%" /NH
+echo Close that program, or put a different port in .env, e.g.  PORT=3001
+echo.
+pause
+exit /b 1
+:port_free
+
+start "" /min cmd /c "timeout /t 4 /nobreak >nul & start http://localhost:%PORT%"
+echo.
+echo  Documentary Studio: http://localhost:%PORT%   -  close this window to stop it.
 echo.
 node app.js
 pause

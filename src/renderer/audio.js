@@ -1,27 +1,34 @@
 'use strict';
-// Builds the film's soundtrack: narration lines placed at their exact times, optional music ducked under the voice,
+// Builds the film's soundtrack: narration lines placed at their exact times, music ducked under the voice, sound effects,
 // loudness-normalised for YouTube (-14 LUFS).
 const fs = require('fs');
 const path = require('path');
 const ff = require('./ffmpeg');
+const sound = require('./sound');
 
 async function buildAudio(tl, outFile) {
   const dir = tl.dir;
   const inputs = [];
   const filters = [];
   const placed = [];
+  let nIn = 0; // ffmpeg input index (inputs[] holds raw arguments, which are not always 2 per input)
   for (const sc of tl.scenes) {
     for (const L of sc.lines) {
       const a = tl.audio[L.id];
       if (!a || !a.file) continue;
       const delay = Math.round((sc.start + L.start) * 1000);
       inputs.push('-i', a.file);
-      placed.push({ idx: inputs.length / 2 - 1, delay });
+      placed.push({ idx: nIn++, delay });
     }
   }
   const total = tl.total.toFixed(3);
-  const music = tl.film.music && tl.film.music.file ? path.join(dir, tl.film.music.file) : null;
-  if (!placed.length && !music) {
+  // music: your uploaded track, or a generated bed in the chosen mood ("mood": "wonder" | "tense" | …)
+  const m = tl.film.music || null;
+  let music = m && m.file && fs.existsSync(path.join(dir, m.file)) ? path.join(dir, m.file) : null;
+  if (!music && m && m.mood) music = sound.musicFile(dir, sound.MOODS[m.mood] ? m.mood : 'wonder', tl.total);
+  // sound effects placed on what appears on screen
+  const fx = sound.placeSfx(tl).map((x) => ({ ...x, file: sound.sfxFile(dir, x.name, x.len) }));
+  if (!placed.length && !music && !fx.length) {
     await ff.run(['-f', 'lavfi', '-i', `anullsrc=r=48000:cl=stereo`, '-t', total, '-c:a', 'aac', '-b:a', '160k', outFile]);
     return outFile;
   }
@@ -36,10 +43,10 @@ async function buildAudio(tl, outFile) {
   }
   let last = voice;
   if (music) {
-    const mIdx = inputs.length / 2;
+    const mIdx = nIn++;
     inputs.push('-stream_loop', '-1', '-i', music);
-    const vol = tl.film.music.volume ?? 0.22;
-    const fadeOut = tl.film.music.fadeOut ?? 3;
+    const vol = m.volume ?? (m.mood && !m.file ? 0.16 : 0.22);
+    const fadeOut = m.fadeOut ?? 3;
     filters.push(`[${mIdx}:a]aresample=48000,aformat=channel_layouts=stereo,volume=${vol},atrim=0:${total},afade=t=in:d=1.5,afade=t=out:st=${Math.max(0, tl.total - fadeOut).toFixed(2)}:d=${fadeOut}[mus]`);
     if (voice) {
       filters.push(`${voice}asplit=2[v1][v2]`);
@@ -47,6 +54,16 @@ async function buildAudio(tl, outFile) {
       filters.push(`[v1][duck]amix=inputs=2:normalize=0:duration=longest[mix]`);
       last = '[mix]';
     } else last = '[mus]';
+  }
+  if (fx.length) {
+    fx.forEach((x, k) => {
+      const idx = nIn++;
+      inputs.push('-i', x.file);
+      const d = Math.round(x.at * 1000);
+      filters.push(`[${idx}:a]aresample=48000,aformat=channel_layouts=stereo,volume=${x.volume.toFixed(3)},adelay=${d}|${d}[fx${k}]`);
+    });
+    filters.push(`${fx.map((_, k) => `[fx${k}]`).join('')}amix=inputs=${fx.length}:normalize=0:dropout_transition=0[sfx]`);
+    if (last) { filters.push(`${last}[sfx]amix=inputs=2:normalize=0:duration=longest[withfx]`); last = '[withfx]'; } else last = '[sfx]';
   }
   filters.push(`${last}apad,atrim=0:${total},loudnorm=I=-14:TP=-1.5:LRA=11[out]`);
   await ff.run([...inputs, '-filter_complex', filters.join(';'), '-map', '[out]', '-ar', '48000', '-c:a', 'aac', '-b:a', '192k', outFile]);

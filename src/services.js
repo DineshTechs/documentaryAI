@@ -16,8 +16,8 @@ function createProject(b, autostart = false) {
   const title = String(b.title || '').trim();
   if (!title) throw new Error('Title is required');
   const p = store.addProject({
-    title, slug: slugify(title), topic: b.topic || title, brief: b.brief || '', duration_s: parseInt(b.duration_s || 90, 10),
-    look: b.look || 'auto', aspect: b.aspect || '16:9', provider: b.provider || null, model: b.model || null, idea_id: b.idea_id || null,
+    title, slug: slugify(title), topic: b.topic || title, brief: b.brief || '', duration_s: b.aspect === '9:16' ? Math.min(180, parseInt(b.duration_s || 60, 10)) : parseInt(b.duration_s || 90, 10),
+    look: b.look || 'auto', aspect: b.aspect || '16:9', language: b.language || '', provider: b.provider || null, model: b.model || null, idea_id: b.idea_id || null,
   });
   fs.mkdirSync(path.join(agent.projectRoot(p), 'uploads'), { recursive: true });
   store.addEvent(p.id, 'system', 'Film created');

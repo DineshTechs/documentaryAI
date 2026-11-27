@@ -4,28 +4,38 @@ const fs = require('fs');
 const path = require('path');
 const { GlobalFonts } = require('@napi-rs/canvas');
 
-const GF = 'https://github.com/google/fonts/raw/main/ofl';
-// role -> [download file, url]
+const GF = 'https://raw.githubusercontent.com/google/fonts/main';
+// file name -> URL (Google Fonts repository; checked addresses)
 const DOWNLOADS = [
-  ['SpecialElite-Regular.ttf', `${GF}/specialelite/SpecialElite-Regular.ttf`],
-  ['Oswald.ttf', `${GF}/oswald/Oswald%5Bwght%5D.ttf`],
-  ['Anton-Regular.ttf', `${GF}/anton/Anton-Regular.ttf`],
-  ['LibreBaskerville-Regular.ttf', `${GF}/librebaskerville/LibreBaskerville-Regular.ttf`],
-  ['LibreBaskerville-Bold.ttf', `${GF}/librebaskerville/LibreBaskerville-Bold.ttf`],
-  ['PlayfairDisplay.ttf', `${GF}/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf`],
-  ['Caveat.ttf', `${GF}/caveat/Caveat%5Bwght%5D.ttf`],
-  ['CourierPrime-Regular.ttf', `${GF}/courierprime/CourierPrime-Regular.ttf`],
-  ['Inter.ttf', `${GF}/inter/Inter%5Bopsz%2Cwght%5D.ttf`],
+  ['SpecialElite-Regular.ttf', `${GF}/apache/specialelite/SpecialElite-Regular.ttf`],
+  ['Oswald.ttf', `${GF}/ofl/oswald/Oswald%5Bwght%5D.ttf`],
+  ['Anton-Regular.ttf', `${GF}/ofl/anton/Anton-Regular.ttf`],
+  ['CrimsonText-Regular.ttf', `${GF}/ofl/crimsontext/CrimsonText-Regular.ttf`],
+  ['CrimsonText-Bold.ttf', `${GF}/ofl/crimsontext/CrimsonText-Bold.ttf`],
+  ['PlayfairDisplay.ttf', `${GF}/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf`],
+  ['Caveat.ttf', `${GF}/ofl/caveat/Caveat%5Bwght%5D.ttf`],
+  ['CourierPrime-Regular.ttf', `${GF}/ofl/courierprime/CourierPrime-Regular.ttf`],
+  ['Inter.ttf', `${GF}/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf`],
+  // Devanagari (Hindi, Marathi…): used automatically for those letters inside any font stack
+  ['Hind-Regular.ttf', `${GF}/ofl/hind/Hind-Regular.ttf`],
+  ['Hind-Bold.ttf', `${GF}/ofl/hind/Hind-Bold.ttf`],
+  ['NotoSerifDevanagari.ttf', `${GF}/ofl/notoserifdevanagari/NotoSerifDevanagari%5Bwdth%2Cwght%5D.ttf`],
+  ['YatraOne-Regular.ttf', `${GF}/ofl/yatraone/YatraOne-Regular.ttf`],
 ];
 
 // Font stacks used by the looks (first available wins).
+// Each stack names a Devanagari font right after the Latin ones: the renderer falls back letter by letter, so English
+// keeps its style and Hindi letters come from the Devanagari font (no empty boxes). "Nirmala UI"/"Mangal" are the
+// Windows system fonts, used if the download failed.
+const DEVA_SANS = '"Hind", "Noto Sans Devanagari", "Nirmala UI", "Mangal"';
+const DEVA_SERIF = '"Noto Serif Devanagari", "Hind", "Nirmala UI", "Mangal"';
 const STACKS = {
-  display: '"Oswald", "Anton", "Bebas Neue", "Archivo Black", "DejaVu Sans Condensed", "DejaVu Sans", sans-serif',
-  serif: '"Libre Baskerville", "Playfair Display", "Crimson Text", "Liberation Serif", "DejaVu Serif", serif',
-  headline: '"Playfair Display", "Libre Baskerville", "Liberation Serif", "DejaVu Serif", serif',
-  type: '"Special Elite", "Courier Prime", "Courier 10 Pitch", "Courier", "Liberation Mono", "DejaVu Sans Mono", monospace',
-  hand: '"Caveat", "Comic Relief", "Liberation Sans", "DejaVu Sans", sans-serif',
-  sans: '"Inter", "Fira Sans", "Liberation Sans", "DejaVu Sans", sans-serif',
+  display: `"Oswald", "Anton", "Bebas Neue", "Archivo Black", "Yatra One", ${DEVA_SANS}, "DejaVu Sans Condensed", "DejaVu Sans", sans-serif`,
+  serif: `"Crimson Text", "Libre Baskerville", "Playfair Display", ${DEVA_SERIF}, "Liberation Serif", "DejaVu Serif", serif`,
+  headline: `"Playfair Display", "Crimson Text", ${DEVA_SERIF}, "Liberation Serif", "DejaVu Serif", serif`,
+  type: `"Special Elite", "Courier Prime", "Courier 10 Pitch", "Courier", ${DEVA_SANS}, "Liberation Mono", "DejaVu Sans Mono", monospace`,
+  hand: `"Caveat", "Comic Relief", "Yatra One", ${DEVA_SANS}, "Liberation Sans", "DejaVu Sans", sans-serif`,
+  sans: `"Inter", "Fira Sans", ${DEVA_SANS}, "Liberation Sans", "DejaVu Sans", sans-serif`,
 };
 
 let registered = false;

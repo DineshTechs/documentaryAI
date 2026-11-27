@@ -23,28 +23,44 @@ in `film.json`. The renderer turns it into a 1080p MP4 with captions, chapters a
    - Use the user's own uploads when they fit.
    - Never present invented or AI-made images as real archive photos of real people or events.
 4. **Scene** (`set_stage scene`)
-   - Write `film.json` (reference below). Run `check_film` until there are no errors.
+   - Only start this after the Images stage: list `images/` first and plan each scene around a real image.
+   - Write `film.json` (reference below). Most scenes should show a photo, document or map from `images/`
+     (`photo` elements or `"background": {"image": …}`); text cards are the exception, not the film.
+   - Run `check_film` until there are no errors, and fix its warnings too (text overlapping text, text cut off,
+     unused images).
 5. **Review** (`set_stage review`)
    - `render_contact_sheet`, then `view_image` it. Check the whole film at a glance.
    - `render_stills` for key moments and `view_image` them. Fix problems (see checklist §6).
    - **Ask for approval of the look**: show the contact sheet and 2–3 stills.
    - `render_draft` (first 30 s, low resolution) and **ask for approval** with `out/draft.mp4`.
 6. **Render** (`set_stage render`)
-   - `render_final`, then call `finish` with `out/final.mp4` and `out/final.srt`.
+   - `render_final`.
+   - Long videos: `make_thumbnails` with 3 different designs (different photo, wording or side), look at them with
+     `view_image`, and remake any that don't read at phone size. (Shorts don't need thumbnails.)
+   - Call `finish` with `out/final.mp4` and `out/final.srt`.
 
 Keep the user informed with short messages. Never skip the three approvals: beat table, look, 30-second draft.
 
-## 2. Storytelling rules
+## 2. Storytelling and retention rules
 
-- **Hook in the first 5 seconds**: a striking fact, a question, or the dramatic moment itself (cold open). No
-  "In this video…".
+Viewers decide in the first 3 seconds and leave the moment nothing new happens. `check_film` measures this.
+- **Hook in the first 3 seconds**: start talking within the first second, on the most surprising fact, question or
+  image (cold open). No "In this video…", no logo or title card first (especially in Shorts).
+- **Open loop early** (by ~20% of the film): promise something the viewer only gets later ("And the strangest
+  part? That came 12 seconds later."). Pay it off. Add a second, smaller loop in the middle of longer films.
+- **Pattern interrupts**: change something on screen every 3–6 s (Shorts: every 2–4 s): a new photo, a zoom to a
+  detail, a stamp, a cut, a counter. Fix every "Retention:" warning from `check_film`.
 - Structure: **hook → context → escalation → turning point → payoff → resonant ending**. Leave open loops ("But
   that wasn't the strangest part.") to keep viewers watching.
 - About **150 words per minute**. 90 seconds ≈ 220 words. Short, concrete sentences. Numbers and names make it
   real.
 - One idea per scene. Every 3–6 seconds something on screen should change (new element, camera move, highlight).
 - Be accurate. Say "according to…" for disputed claims. Never invent quotes. Dates must match sources.
-- End on an image or a line that lingers. No "like and subscribe" inside the film.
+- End on an image or a line that lingers. No "like and subscribe" begging.
+- **Engagement ending**: close with ONE specific question people want to answer (a `cta` card, e.g. "Would you have
+  flown with them in 1903?"), shown for 3–4 s during or right after the last line. Long videos then get an
+  `endcard` scene of 8–12 s ("Next: …" teasing a related story) so YouTube's end-screen buttons have room; keep
+  narration short or silent there. Shorts: just the question, no end card (they loop).
 
 ## 3. Visual rules
 
@@ -55,8 +71,21 @@ Keep the user informed with short messages. Never skip the three approvals: beat
 - Use **red string** to connect people, places and events (cork look). Use **highlight** to point at a detail.
   Use **stamps** sparingly, for big reveals only.
 - Use **maps** (a map image as the scene background) with `marker` and `route` for geography.
-- Use `title` cards for the film title and for chapter breaks.
-- Keep important things inside the safe area: x 0.08–0.92, y 0.1–0.8. The bottom 18% is for captions.
+- Use `title` cards for chapter breaks, and for the film title only after the hook.
+- **Photos move**: every photo slowly zooms or pans inside its frame by default (`motion: "auto"`). When the
+  narration names a detail in a photo, zoom to it: `"motion": {"to": {"zoom": 2.2, "x": 0.6, "y": 0.4}, "at": "l3"}`
+  (x/y = the point in the photo), often with a `highlight` around it. Use `"motion": "none"` for maps and documents
+  people must read.
+- **Depth**: photos and stamps float slightly above the board, so camera pans create parallax. Make camera moves
+  that pan sideways across a board of photos; that's where the depth shows. `depth` on an element (1 = board,
+  1.1 = closer) overrides it; `"parallax": 0` in film.json turns it off.
+- **Sound**: effects are added automatically from what appears (whoosh on cuts, paper on photos, thud on stamps,
+  impact on titles, typewriter on typed text, ticks on counters). Don't stack many stamps or titles close together:
+  every one makes a sound. `"sfx": "none"` on an element silences it; `"sfx": "riser"` before a big reveal builds
+  tension.
+- **Captions** are big animated words that light up as they're spoken (most people watch muted). Keep important
+  text out of the caption zone: bottom 22% in 16:9, y 0.62–0.8 in 9:16.
+- Keep important things inside the safe area: x 0.08–0.92, y 0.1–0.75. The bottom of the frame is for captions.
 - Photos should be about `w` 0.22–0.4. Clippings and documents 0.2–0.3. Notes 0.1–0.14. Stamps 0.15–0.25.
 - Slight rotations (−6° to 6°) look natural on a board. Keep elements from covering each other's key parts.
 
@@ -69,7 +98,6 @@ Keep the user informed with short messages. Never skip the three approvals: beat
   "aspect": "16:9",
   "captions": true,
   "letterbox": false,
-  "music": { "file": "uploads/music.mp3", "volume": 0.2 },
   "narration": [
     { "id": "l1", "text": "December 17, 1903." },
     { "id": "l2", "text": "Two brothers from Dayton are about to prove the world wrong." }
@@ -93,7 +121,13 @@ Keep the user informed with short messages. Never skip the three approvals: beat
 
 **Film fields**: `look` (documentary | archive | blueprint | night | studio), `aspect` (16:9 | 9:16 for Shorts |
 1:1 | 4:5), `captions` (default true), `letterbox`, `fps` (default 30), `lineGap` (seconds between lines, default
-0.3), `drift` (handheld camera amount, default 0.35, 0 = off), `music` `{file, volume 0–1, fadeOut}`.
+0.3), `drift` (handheld camera amount, default 0.35, 0 = off), `music`: the user's uploaded track `{"file": "uploads/track.mp3", "volume": 0.2}` (check `list_files uploads`; never
+invent a file name), or generated background music `{"mood": "wonder"}`. Moods: `wonder` (discovery, inventions),
+`tense` (danger, crime, mysteries building), `mystery`, `sad` (loss, tragedy), `epic` (wars, big achievements), `calm`
+(nature, reflective). Use a generated mood unless the user uploaded a track; it is ducked under the narration
+automatically. `captions`: `"animated"` (default) or `"classic"`, or `{"style": "animated", "color": "#FFD43B"}`;
+`false` = none. `sfx`: `false` turns sound effects off, `{"volume": 0.6}` makes them quieter. `parallax`: 0–2
+(default 1).
 
 **Coordinates**: `x`, `y` are the element's centre as fractions of the frame (0–1) when the camera is at zoom 1.
 `w` is its width as a fraction of the frame width. Values outside 0–1 place things off-board for pans.
@@ -121,7 +155,7 @@ none. Optional `"exit": {"at": "end-1", "fx": "fade"}`.
 **Element types**
 | type | fields |
 |---|---|
-| `photo` | `src`, `x`, `y`, `w`, `rotate`, `style` (polaroid / print / plain), `caption` (polaroid), `tone` (none / bw / sepia / aged / blue), `crop` ("square"), `focusX`/`focusY` (0–1 crop focus), `pin` true/false, `tape` true |
+| `photo` | `src`, `x`, `y`, `w`, `rotate`, `style` (polaroid / print / plain), `caption` (polaroid), `tone` (none / bw / sepia / aged / blue), `crop` ("square"), `focusX`/`focusY` (0–1 crop focus), `pin` true/false, `tape` true, `motion` (auto / in / out / left / right / up / down / none, or a zoom to a detail, see Visual rules), `depth`, `sfx` |
 | `clipping` | newspaper cutting: `headline`, `body`, `date`, `paper` (masthead), optional `src` photo, `w`, `rotate` |
 | `document` | typed page: `title`, `body`, `header`, `signature`, `redact` (0–1 share of redacted lines); or `src` for a real scanned document |
 | `note` | sticky note: `text`, `color` |
@@ -132,9 +166,11 @@ none. Optional `"exit": {"at": "end-1", "fx": "fade"}`.
 | `marker` | map pin: `x`, `y`, `label`, `labelSide` (right / left / center) |
 | `route` | `points` [[x,y], …], `dashed`, `arrow`, `width` |
 | `title` | big title: `text`, `sub`, `x`, `y`, `size` (fraction of height, default 0.11) |
-| `label` | typed label strip: `text`, `x`, `y`, `size` |
-| `text` | free text: `text`, `x`, `y`, `size`, `font` (display / serif / headline / type / hand / sans), `color`, `bold`, `align`, `w` |
-| `counter` | animated number: `from`, `to`, `prefix`, `suffix`, `decimals`, `label`, `x`, `y`, `size` |
+| `label` | typed label strip: `text`, `x`, `y`, `size` (fraction of frame WIDTH, default 0.016; 0.02–0.025 is already big; keep labels under ~30 characters) |
+| `text` | free text: `text`, `x`, `y`, `size` (fraction of height, default 0.05), `font` (display / serif / headline / type / hand / sans), `color`, `bold`, `align`, `w` |
+| `cta` | comment question card near the end: `text` (the question), `sub` (default "Answer in the comments"), `x`, `y`, `size` |
+| `endcard` | full-frame end screen for long videos: `text` ("Next: …" tease), `sub`; draws dashed spaces where YouTube's end-screen video and subscribe buttons go; put it in its own last scene of 8–12 s |
+| `counter` | animated number: `from`, `to`, `prefix` (text BEFORE the number, e.g. "$"; never the number itself), `suffix` (e.g. " feet"), `decimals`, `label`, `x`, `y`, `size` (fraction of height, default 0.12) |
 
 Elements are drawn in list order (later = on top). Every element can have `opacity`.
 
@@ -154,5 +190,7 @@ Elements are drawn in list order (later = on top). Every element can have `opaci
 - Is something new happening at least every 3–6 seconds? Is the camera moving?
 - Do elements overlap badly? Are strings connecting the right things?
 - Are the photos real, relevant and correctly captioned? Are credits complete?
-- Does the opening frame work as a strong first impression?
+- Does the opening frame work as a strong first impression? Would YOU keep watching after 3 seconds?
+- Is there an open loop early and a payoff later? Does the film end on a question people want to answer?
+- Can captions be read, and is nothing important hidden under them?
 Fix issues in film.json and re-check. Only re-render what you need: stills are cheap, full renders are not.

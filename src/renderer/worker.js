@@ -10,6 +10,7 @@ process.on('message', async (job) => {
     else if (job.cmd === 'stills') result = await r.renderStills(job.dir, job.opts.times, job.opts);
     else if (job.cmd === 'contact') result = await r.contactSheet(job.dir, job.opts);
     else if (job.cmd === 'inspect') result = await r.inspect(job.dir);
+    else if (job.cmd === 'thumbnails') result = await require('./thumbnail').renderThumbnails(job.dir, job.opts.specs || []);
     else throw new Error(`unknown job ${job.cmd}`);
     process.send({ type: 'done', result }, () => process.exit(0));
   } catch (e) {

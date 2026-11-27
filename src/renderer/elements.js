@@ -7,7 +7,7 @@ const { font } = require('./fonts');
 const { clamp, lerp, ease, rng, wrap, fitText, rgba } = require('./util');
 
 const SPRITE_TYPES = new Set(['photo', 'clipping', 'document', 'note', 'stamp']);
-const LIVE_TYPES = new Set(['text', 'title', 'label', 'string', 'route', 'marker', 'highlight', 'arrow', 'counter']);
+const LIVE_TYPES = new Set(['text', 'title', 'label', 'string', 'route', 'marker', 'highlight', 'arrow', 'counter', 'cta', 'endcard']);
 const ALL_TYPES = new Set([...SPRITE_TYPES, ...LIVE_TYPES]);
 
 // ------------------------------------------------------------------ image tone
@@ -94,7 +94,9 @@ function buildPhoto(el, img, pxW, look) {
   const cropRatio = el.crop === 'square' ? 1 : el.aspect ? 1 / el.aspect : ratio;
   const innerH = Math.round(innerW * cropRatio);
   const W = pxW, H = Math.round(innerH + pxW * (border + bottom));
-  const toned = toneImage(img, tone, Math.max(innerW, innerH) * 1.05);
+  // Ken Burns zooms inside the frame need a sharper source image
+  const kbMax = motionMaxZoom(el);
+  const toned = toneImage(img, tone, Math.max(innerW, innerH) * 1.05 * kbMax);
   const spr = withShadow(W, H, (g, shadowPass) => {
     if (style !== 'plain') {
       g.fillStyle = style === 'polaroid' ? '#f7f3ea' : '#fbf8f2'; g.fillRect(0, 0, W, H);
@@ -114,7 +116,56 @@ function buildPhoto(el, img, pxW, look) {
       lines.forEach((l, i) => g.fillText(l, W / 2, cy + i * px * 1.05));
     }
   });
+  spr.inner = { toned, x: spr.pad + Math.round(pxW * border), y: spr.pad + Math.round(pxW * border), w: innerW, h: innerH,
+    fx: clamp(el.focusX ?? 0.5), fy: clamp(el.focusY ?? 0.5) };
   return finishSprite(spr, el, look);
+}
+
+// ---- photo motion inside the frame (Ken Burns). el.motion:
+//   "auto" (default: gentle zoom/pan picked per photo), "in", "out", "left", "right", "up", "down", "none", or
+//   { "to": { "zoom": 2, "x": 0.6, "y": 0.4 }, "at": "l3", "dur": 1.5 }  -> zoom to a detail (x/y = point in the photo)
+const MOTIONS = {
+  in: [{ zoom: 1, x: 0.5, y: 0.5 }, { zoom: 1.18, x: 0.5, y: 0.45 }],
+  out: [{ zoom: 1.2, x: 0.5, y: 0.45 }, { zoom: 1, x: 0.5, y: 0.5 }],
+  left: [{ zoom: 1.15, x: 0.62, y: 0.5 }, { zoom: 1.15, x: 0.38, y: 0.5 }],
+  right: [{ zoom: 1.15, x: 0.38, y: 0.5 }, { zoom: 1.15, x: 0.62, y: 0.5 }],
+  up: [{ zoom: 1.15, x: 0.5, y: 0.62 }, { zoom: 1.15, x: 0.5, y: 0.38 }],
+  down: [{ zoom: 1.15, x: 0.5, y: 0.38 }, { zoom: 1.15, x: 0.5, y: 0.62 }],
+};
+function hashPick(str, n) { let h = 0; for (const c of String(str)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return h % n; }
+function motionSpec(el) {
+  const m = el.motion ?? 'auto';
+  if (m === 'none' || m === false) return null;
+  if (typeof m === 'object') return { from: m.from || { zoom: 1, x: 0.5, y: 0.5 }, to: m.to || { zoom: 1.6, x: 0.5, y: 0.5 }, at: m.at, dur: m.dur };
+  const name = m === 'auto' ? ['in', 'out', 'left', 'right', 'in'][hashPick(el.id || el.src, 5)] : m;
+  const k = MOTIONS[name] || MOTIONS.in;
+  return { from: k[0], to: k[1] };
+}
+function motionMaxZoom(el) {
+  const sp = motionSpec(el);
+  return sp ? clamp(Math.max(sp.from.zoom || 1, sp.to.zoom || 1), 1, 3) : 1;
+}
+// draw the photo's image area at time t (board px, sprite coordinates already set up by drawSprite)
+function drawMotion(g, el, spr, ctx) {
+  const sp = motionSpec(el), inn = spr.inner;
+  if (!sp || !inn || !ctx) return;
+  let p;
+  if (sp.at != null) { // zoom to a detail at a moment, then hold
+    const t0 = ctx.resolveAt(sp.at), d = sp.dur || 1.6;
+    p = ease('inOut', clamp((ctx.t - t0) / d));
+  } else { // slow drift over the time the photo is on screen
+    const t0 = ctx.resolveAt(el.enter && el.enter.at != null ? el.enter.at : 0);
+    const t1 = el.exit && el.exit.at != null ? ctx.resolveAt(el.exit.at) : ctx.dur;
+    p = clamp((ctx.t - t0) / Math.max(1, t1 - t0));
+  }
+  const z = lerp(sp.from.zoom || 1, sp.to.zoom || 1, p);
+  const cx = lerp(sp.from.x ?? 0.5, sp.to.x ?? 0.5, p), cy = lerp(sp.from.y ?? 0.5, sp.to.y ?? 0.5, p);
+  const im = inn.toned;
+  const cover = Math.max(inn.w / im.width, inn.h / im.height) * z;
+  const sw = inn.w / cover, sh = inn.h / cover;
+  const sx = clamp(cx * im.width - sw / 2, 0, im.width - sw), sy = clamp(cy * im.height - sh / 2, 0, im.height - sh);
+  const ox = -spr.canvas.width / 2, oy = -spr.canvas.height / 2;
+  g.drawImage(im, sx, sy, sw, sh, ox + inn.x, oy + inn.y, inn.w, inn.h);
 }
 
 function finishSprite(spr, el, look) {
@@ -289,7 +340,7 @@ function animState(el, t, sceneDur, resolveAt) {
 }
 
 // ------------------------------------------------------------------ drawing
-function drawSprite(g, el, spr, F, st) {
+function drawSprite(g, el, spr, F, st, ctx) {
   const { W, H } = F;
   if (st.p <= 0 || st.q <= 0) return;
   const base = el.w * W / spr.cw; // board px per sprite px
@@ -323,6 +374,7 @@ function drawSprite(g, el, spr, F, st) {
     g.beginPath(); g.rect(-sw / 2, -sh / 2, sw * ease('inOut', e), sh); g.clip();
   }
   g.drawImage(spr.canvas, -sw / 2, -sh / 2);
+  if (el.type === 'photo') drawMotion(g, el, spr, ctx);
   g.restore();
 }
 
@@ -467,9 +519,65 @@ function drawLive(g, el, F, st, ctx) {
       });
       break;
     }
+    case 'cta': {
+      // comment prompt: a speech-bubble card with the question, gently pulsing so the eye goes to it
+      const vertical = H > W;
+      const x = (el.x ?? 0.5) * W, y = (el.y ?? (vertical ? 0.42 : 0.5)) * H;
+      const px = H * (el.size || (vertical ? 0.034 : 0.05));
+      const pulse = 1 + 0.015 * Math.sin(ctx.t * 4);
+      g.save();
+      g.translate(x, y); g.scale(pulse * (0.9 + 0.1 * ease('back', e)), pulse * (0.9 + 0.1 * ease('back', e)));
+      g.font = font(el.font || 'sans', px, 'bold');
+      const lines = wrap(g, String(el.text || ''), W * (el.w || (vertical ? 0.78 : 0.62)));
+      const sub = el.sub ?? 'Answer in the comments';
+      const subPx = px * 0.55;
+      const tw = Math.max(...lines.map((l) => g.measureText(l).width), (g.font = font('sans', subPx), g.measureText(sub).width));
+      const bw = tw + px * 1.6, bh = lines.length * px * 1.2 + subPx * 1.8 + px * 1.1;
+      g.shadowColor = 'rgba(0,0,0,0.45)'; g.shadowBlur = px * 0.6; g.shadowOffsetY = px * 0.15;
+      g.fillStyle = el.background || 'rgba(255,255,255,0.96)';
+      g.beginPath(); g.roundRect(-bw / 2, -bh / 2, bw, bh, px * 0.45);
+      g.moveTo(-bw * 0.28, bh / 2 - 1); g.lineTo(-bw * 0.38, bh / 2 + px * 0.7); g.lineTo(-bw * 0.16, bh / 2 - 1); g.fill(); // bubble tail
+      g.shadowColor = 'transparent';
+      g.fillStyle = el.accent || look.accent || '#e0b25c'; g.fillRect(-bw / 2, -bh / 2, px * 0.28, bh);
+      g.fillStyle = el.color || '#16130f'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.font = font(el.font || 'sans', px, 'bold');
+      const top = -bh / 2 + px * 0.55 + px * 0.6;
+      lines.forEach((l, i) => g.fillText(l, 0, top + i * px * 1.2));
+      g.font = font('sans', subPx); g.fillStyle = 'rgba(22,19,15,0.6)';
+      g.fillText(`↓ ${sub}`, 0, top + lines.length * px * 1.2 + subPx * 0.4); // emoji fonts aren't installed everywhere
+      g.restore();
+      break;
+    }
+    case 'endcard': {
+      // last seconds: darkened board, a "watch next" line, and outlined spaces where YouTube's end-screen
+      // elements (a video and the subscribe button) will be placed in YouTube Studio
+      const vertical = H > W;
+      g.save();
+      g.globalAlpha = alpha * 0.72; g.fillStyle = '#000'; g.fillRect(-W, -H, W * 3, H * 3); g.globalAlpha = alpha;
+      const px = H * (el.size || (vertical ? 0.034 : 0.058));
+      g.font = font(el.font || 'display', px, 'bold'); g.fillStyle = '#fff'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      const lines = wrap(g, String(el.text || 'Watch next'), W * 0.86);
+      lines.forEach((l, i) => g.fillText(l, W / 2, H * (vertical ? 0.2 : 0.16) + i * px * 1.1));
+      if (el.sub) { g.font = font('sans', px * 0.45); g.fillStyle = 'rgba(255,255,255,0.75)'; g.fillText(String(el.sub), W / 2, H * (vertical ? 0.2 : 0.16) + lines.length * px * 1.1 + px * 0.1); }
+      if (!vertical && el.slots !== false) {
+        g.strokeStyle = 'rgba(255,255,255,0.35)'; g.lineWidth = Math.max(2, W * 0.0015); g.setLineDash([W * 0.008, W * 0.006]);
+        const vw = W * 0.36, vh = vw * 9 / 16, vx = W * 0.3 - vw / 2, vy = H * 0.62 - vh / 2;
+        g.beginPath(); g.roundRect(vx, vy, vw, vh, W * 0.006); g.stroke();
+        g.beginPath(); g.arc(W * 0.72, H * 0.62, H * 0.12, 0, Math.PI * 2); g.stroke();
+        g.setLineDash([]);
+      }
+      g.restore();
+      break;
+    }
     case 'counter': {
       const v = lerp(+el.from || 0, +el.to || 0, ease('out', e));
-      const txt = (el.prefix || '') + (el.decimals ? v.toFixed(el.decimals) : Math.round(v).toLocaleString('en-US')) + (el.suffix || '');
+      // models sometimes repeat the number in the prefix ("120 " + 120 + "feet"): drop it, and space out word suffixes
+      let pre = String(el.prefix || ''), suf = String(el.suffix || '');
+      const toStr = String(el.to ?? '').trim();
+      const bare = pre.replace(/[,\s]+$/, '');
+      if (toStr && bare.endsWith(toStr)) pre = bare.slice(0, -toStr.length); // "120 " -> "", "$ 120" -> "$ "
+      if (/^\p{L}/u.test(suf) && suf.length > 1) suf = ' ' + suf;            // "feet" -> " feet"
+      const txt = pre + (el.decimals ? v.toFixed(el.decimals) : Math.round(v).toLocaleString('en-US')) + suf;
       const px = H * (el.size || 0.12);
       g.font = font(el.font || 'display', px, 'bold'); g.fillStyle = el.color || look.ink;
       g.textAlign = 'center'; g.textBaseline = 'middle';

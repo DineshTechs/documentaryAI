@@ -138,19 +138,32 @@ function drawFrame(g, tl, sc, ts, F, prep, cues) {
   }
 
   // elements
+  // depth parallax: photos and stamps sit a little above the board, so camera moves shift them a bit more
+  const par = tl.film.parallax ?? 1;
+  const depthOf = (el) => el.depth ?? (E.SPRITE_TYPES.has(el.type) ? 1 + 0.05 * par : 1);
+  const shift = (el) => { const k = depthOf(el) - 1; return { x: -(cam.x + dx - 0.5) * W * k * 2, y: -(cam.y + dy - 0.5) * H * k * 2 }; };
   const ctx = {
     t: ts,
+    dur: sc.dur,
     resolveAt: sc.resolveAt,
-    anchor: (id, which = 'pin') => { const el = prep.byId.get(id); return el ? E.anchorOf(el, prep.sprites, F, which) : null; },
+    anchor: (id, which = 'pin') => {
+      const el = prep.byId.get(id);
+      if (!el) return null;
+      const a = E.anchorOf(el, prep.sprites, F, which), o = shift(el);
+      return { ...a, x: a.x + o.x, y: a.y + o.y };
+    },
   };
   for (const el of sc.elements || []) {
     const st = E.animState(el, ts, sc.dur, sc.resolveAt);
+    const o = shift(el), moved = o.x || o.y;
+    if (moved) { g.save(); g.translate(o.x, o.y); }
     if (E.SPRITE_TYPES.has(el.type)) {
       const spr = prep.sprites.get(el.id);
-      if (spr) E.drawSprite(g, el, spr, F, st);
+      if (spr) E.drawSprite(g, el, spr, F, st, ctx);
     } else {
       E.drawLive(g, el, F, st, ctx);
     }
+    if (moved) g.restore();
   }
   g.restore();
 
@@ -169,8 +182,13 @@ function drawFrame(g, tl, sc, ts, F, prep, cues) {
 
   // captions
   if (tl.captions && cues) {
-    const cue = cues.find((c) => tg >= c.start && tg < c.end);
-    if (cue) drawCaption(g, cue.text, F, tl);
+    if (tl.captionStyle === 'animated') {
+      const grp = activeGroup(tl, tg);
+      if (grp) drawAnimatedCaption(g, grp, tg, F, tl);
+    } else {
+      const cue = cues.find((c) => tg >= c.start && tg < c.end);
+      if (cue) drawCaption(g, cue.text, F, tl);
+    }
   }
 
   // transitions (to/from black, white flash)
@@ -182,6 +200,85 @@ function drawFrame(g, tl, sc, ts, F, prep, cues) {
   if (fadeOutDur && ts > sc.dur - fadeOutDur) black = Math.max(black, ease('inOut', (ts - (sc.dur - fadeOutDur)) / fadeOutDur));
   if (black > 0) { g.globalAlpha = clamp(black); g.fillStyle = '#000'; g.fillRect(0, 0, W, H); g.globalAlpha = 1; }
   if (sc.transition === 'flash' && prev && ts < 0.3) { g.globalAlpha = 1 - ts / 0.3; g.fillStyle = '#fff'; g.fillRect(0, 0, W, H); g.globalAlpha = 1; }
+}
+
+// ---- animated captions: short groups of words, the spoken word lit up (style used by most Shorts/Reels)
+// Word times are estimated inside each narration line by word length (longer words take longer to say).
+function wordGroups(tl) {
+  if (tl._wordGroups) return tl._wordGroups;
+  const vertical = tl.H > tl.W;
+  const maxWords = vertical ? 3 : 6, maxChars = vertical ? 20 : 38;
+  const groups = [];
+  for (const sc of tl.scenes) {
+    for (const L of sc.lines) {
+      const words = String(L.text || '').split(/\s+/).filter(Boolean);
+      if (!words.length) continue;
+      const weight = (w) => w.replace(/[^\p{L}\p{N}]/gu, '').length + 2 + (/[,.;:!?—–]$/.test(w) ? 3 : 0); // pauses after punctuation
+      const total = words.reduce((a, w) => a + weight(w), 0);
+      let t = sc.start + L.start;
+      const timed = words.map((w) => { const d = L.dur * weight(w) / total; const x = { w, start: t, end: t + d }; t += d; return x; });
+      let cur = [];
+      const flush = () => { if (cur.length) groups.push({ start: cur[0].start, end: cur[cur.length - 1].end, words: cur }); cur = []; };
+      for (const x of timed) {
+        const chars = cur.reduce((a, y) => a + y.w.length + 1, 0) + x.w.length;
+        if (cur.length && (cur.length >= maxWords || chars > maxChars)) flush();
+        cur.push(x);
+        if (/[.!?;:—–]$/.test(x.w) || (/,$/.test(x.w) && cur.length >= 2)) flush(); // break groups at natural pauses
+      }
+      flush();
+    }
+  }
+  // hold each group on screen through short gaps so captions don't flicker
+  groups.forEach((g, i) => { const n = groups[i + 1]; g.show = n && n.start - g.end < 0.35 ? n.start : g.end + 0.15; });
+  tl._wordGroups = groups;
+  return groups;
+}
+function activeGroup(tl, t) {
+  const gs = wordGroups(tl);
+  for (const g of gs) if (t >= g.start && t < g.show) return g;
+  return null;
+}
+function drawAnimatedCaption(g, grp, t, F, tl) {
+  const { W, H } = F;
+  const vertical = H > W;
+  const px = Math.round(vertical ? W * 0.082 : H * 0.068);
+  const hi = tl.captionColor || '#FFD43B';
+  g.save();
+  g.font = fonts.font('sans', px, 'bold');
+  g.textBaseline = 'middle'; g.textAlign = 'left';
+  const space = g.measureText(' ').width * 1.35; // room for the highlighted word to grow
+  // lay words out in up to 2 centred lines
+  const maxW = W * (vertical ? 0.84 : 0.8);
+  const lines = [[]]; let lw = 0;
+  for (const x of grp.words) {
+    const w = g.measureText(x.w).width;
+    if (lines[lines.length - 1].length && lw + space + w > maxW) { lines.push([]); lw = 0; }
+    lines[lines.length - 1].push({ ...x, width: w }); lw += (lw ? space : 0) + w;
+  }
+  const lh = px * 1.18;
+  const cy = vertical ? H * 0.70 : H - (tl.letterbox ? H * 0.06 : 0) - H * 0.13;
+  const pop = 1 + 0.08 * (1 - clamp((t - grp.start) / 0.12)); // whole group pops in slightly
+  lines.forEach((line, li) => {
+    const total = line.reduce((a, x) => a + x.width, 0) + space * (line.length - 1);
+    let x = W / 2 - total / 2;
+    const y = cy + (li - (lines.length - 1) / 2) * lh;
+    for (const wd of line) {
+      const active = t >= wd.start && t < wd.end;
+      const spoken = t >= wd.end;
+      const s = (active ? 1.06 + 0.08 * (1 - clamp((t - wd.start) / 0.1)) : 1) * pop;
+      g.save();
+      g.translate(x + wd.width / 2, y); g.scale(s, s);
+      g.lineJoin = 'round'; g.lineWidth = px * 0.2; g.strokeStyle = 'rgba(0,0,0,0.92)';
+      g.shadowColor = 'rgba(0,0,0,0.5)'; g.shadowBlur = px * 0.25; g.shadowOffsetY = px * 0.06;
+      g.strokeText(wd.w, -wd.width / 2, 0);
+      g.shadowColor = 'transparent';
+      g.fillStyle = active ? hi : spoken ? '#FFFFFF' : 'rgba(255,255,255,0.92)';
+      g.fillText(wd.w, -wd.width / 2, 0);
+      g.restore();
+      x += wd.width + space;
+    }
+  });
+  g.restore();
 }
 
 function drawCaption(g, text, F, tl) {
@@ -254,7 +351,7 @@ function sceneHash(tl, sc, F, extra) {
   if (sc.background && sc.background.image) { try { mt.push(fs.statSync(path.join(tl.dir, sc.background.image)).mtimeMs); } catch (_) { /* */ } }
   const data = JSON.stringify({
     v: 3, sc: { ...sc, resolveAt: undefined, frames: undefined }, look: tl.look, W: F.W, H: F.H, fps: tl.fps,
-    cap: tl.captions, lb: tl.letterbox, drift: tl.film.drift, nextT: next ? next.transition : 'END', mt, extra,
+    cap: `${tl.captions}:${tl.captionStyle}:${tl.captionColor}`, lb: tl.letterbox, drift: tl.film.drift, nextT: next ? next.transition : 'END', mt, extra,
   });
   return crypto.createHash('sha1').update(data).digest('hex').slice(0, 12);
 }

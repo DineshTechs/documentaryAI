@@ -5,6 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const store = require('./store');
 const llm = require('./llm');
+const eta = require('./eta');
+const youtube = require('./youtube');
 const tts = require('./tts');
 const research = require('./research');
 const ff = require('./renderer/ffmpeg');
@@ -53,7 +55,8 @@ const TOOLS = [
   { name: 'commons_download', description: 'Download a Wikimedia Commons file (exact title from commons_search) into images/. Only free licences are allowed. The credit is added to credits.md automatically.',
     parameters: { type: 'object', properties: { title: { type: 'string' }, save_as: { type: 'string', description: 'short file name without extension, e.g. wright_brothers' } }, required: ['title'] } },
   { name: 'tts_generate', description: 'Generate the narration audio for lines in film.json (narration ids) with the voice configured in Settings. Writes audio/<id>.mp3. Skips lines that already have audio unless force is true (use force after changing a line). Returns each line\'s length in seconds.',
-    parameters: { type: 'object', properties: { ids: { type: 'array', items: { type: 'string' }, description: 'line ids; omit for all lines' }, force: { type: 'boolean' }, voice: { type: 'string' } } } },
+    parameters: { type: 'object', properties: { ids: { type: 'array', items: { type: 'string' }, description: 'line ids; omit for all lines' },
+      force: { type: 'boolean', description: 'Regenerate lines that already have audio. Lines whose text and voice did not change are kept anyway (saves voice credits).' } } } },
   { name: 'audio_silences', description: 'Find the pauses in an uploaded voice recording (to split it into narration lines).',
     parameters: { type: 'object', properties: { path: { type: 'string' }, min_silence: { type: 'number', description: 'seconds, default 0.45' } }, required: ['path'] } },
   { name: 'split_audio', description: 'Cut a recording into narration line files audio/<id>.mp3 at the given times (seconds). cuts has one fewer entry than ids.',
@@ -62,6 +65,13 @@ const TOOLS = [
     parameters: { type: 'object', properties: {} } },
   { name: 'render_stills', description: 'Render single frames as PNG to review. times: seconds ("12.5"), a scene id ("s3" = 60% into it) or "s3@2.5". Then look at them with view_image.',
     parameters: { type: 'object', properties: { times: { type: 'array', items: { type: 'string' } } }, required: ['times'] } },
+  { name: 'make_thumbnails', description: 'Render 2-3 designed YouTube thumbnails (1280x720, out/thumb_N.png) from the film photos: big 2-5 word text with one highlighted word, optional red circle/arrow on the point of interest, optional badge. The first one becomes the upload thumbnail; the user can pick another in Publish. View them with view_image.',
+    parameters: { type: 'object', properties: { variants: { type: 'array', items: { type: 'object', properties: {
+      image: { type: 'string', description: 'images/… photo' }, text: { type: 'string', description: '2-5 words, curiosity, not the title' },
+      highlight: { type: 'string', description: 'word(s) to colour' }, side: { type: 'string', enum: ['left', 'right'], description: 'where the text goes' },
+      focus: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' } }, description: 'point of interest in the photo, 0-1' },
+      circle: { type: 'boolean' }, arrow: { type: 'boolean' }, badge: { type: 'string' }, color: { type: 'string', enum: ['yellow', 'red', 'white', 'orange', 'cyan'] }, zoom: { type: 'number' } },
+      required: ['image', 'text'] } } }, required: ['variants'] } },
   { name: 'render_contact_sheet', description: 'Render a grid of evenly spaced frames from the whole film (out/contact_sheet.png) for a quick visual review. Then view_image it.',
     parameters: { type: 'object', properties: { count: { type: 'integer', description: 'frames, default 12' } } } },
   { name: 'render_draft', description: 'Render a fast low-resolution draft with sound (default the first 30 s) to out/draft.mp4 for the user to approve.',
@@ -78,6 +88,20 @@ const TOOLS = [
     parameters: { type: 'object', properties: { summary: { type: 'string' }, video: { type: 'string' }, srt: { type: 'string' } }, required: ['summary', 'video'] } },
 ];
 
+const filmLanguage = (p) => p.language || (store.getSetting('channel', {}) || {}).language || 'English';
+function languageRules(lang) {
+  if (/hinglish/i.test(lang)) return `- Narration: natural spoken Hinglish, the way Indian YouTubers talk: Hindi sentences with common English words
+  (technology, science, numbers, names). Write Hindi words in Devanagari and English words in English letters, e.g.
+  "1903 में Wright brothers ने पहली powered flight की।"
+- On-screen text (titles, labels, stamps, notes): short; Hindi in Devanagari or English, whichever reads faster.
+- script.md, captions and narration lines use the same mix. Research can be in English.`;
+  if (/hindi|हिन्दी|हिंदी/i.test(lang)) return `- Narration: simple, spoken Hindi (not formal/Sanskritised), written in Devanagari. Keep well-known English
+  names and terms (Wright brothers, airplane) as people say them, in Devanagari (राइट ब्रदर्स) or English letters.
+- On-screen text (titles, labels, stamps, notes): Hindi in Devanagari; dates and numbers in digits.
+- Write numbers as digits (1903, 12 सेकंड) so the voice reads them correctly. Research can be in English.`;
+  return `- Narration and on-screen text in ${lang}.`;
+}
+
 function systemPrompt(p) {
   const channel = store.getSetting('channel', {}) || {};
   const t = tts.settings();
@@ -91,15 +115,30 @@ You work only through your tools. Follow the guide below closely.
 - Brief: ${p.brief || '(none)'}
 - Target length: about ${p.duration_s || 90} seconds (≈ ${Math.round((p.duration_s || 90) * 2.5)} words of narration)
 - Look: ${p.look && p.look !== 'auto' ? p.look : 'choose the best look for the subject'}
-- Format: ${p.aspect || '16:9'}${p.aspect === '9:16' ? ' (YouTube Shorts: keep it under 60 s, big text, faster pace)' : ''}
+- Format: ${p.aspect || '16:9'}${p.aspect === '9:16' ? `
+- THIS IS A YOUTUBE SHORT (vertical 1080x1920, watched on phones). Rules:
+  - Hard limit 3 minutes (YouTube only counts vertical videos up to 3 min as Shorts); aim for the target length above.
+  - Hook in the first 1-2 seconds: start on the most surprising fact or image, no title card first.
+  - One idea per 2-4 seconds; fast cuts; big bold text (size 0.07+), few words per screen.
+  - Keep text and faces in the middle: x 0.1-0.85, y 0.15-0.7 (YouTube's buttons cover the right edge and the bottom).
+  - Photos should fill most of the frame (w 0.7-0.9); use one photo per scene rather than a busy board.
+  - End with a line that makes people want to rewatch or comment. No "subscribe".` : ''}
 - Workspace files: film.json, script.md, beats.md, sources.md, credits.md, images/, audio/, uploads/ (the user's own files), out/
 
 ## Channel
 - Name: ${channel.name || '(not set)'}; style and audience: ${channel.style || '(not set)'}
-- Language: ${channel.language || 'English'}
+
+## Language of this film: ${filmLanguage(p)}
+The film language is ONLY for what the audience hears and reads: narration lines, script.md, captions and on-screen
+text${filmLanguage(p) === 'English' ? '' : ' (and the YouTube title/description, which the app writes separately)'}.
+Everything you say to the user is ALWAYS in English: chat messages, approval requests (title and summary), notes,
+explanations, beats.md and sources.md descriptions. Quote the narration in the film language where needed, but write
+your own words in English.
+${languageRules(filmLanguage(p))}
 
 ## Voice
-- Narration voice provider: ${t.provider || 'none'}${(!t.provider || t.provider === 'none') ? ' - no voice is configured, so audio will be silent and timing estimated. Tell the user once that they can add OpenAI TTS or ElevenLabs in Settings, then carry on.' : ''}
+- Narration voice provider: ${t.provider || 'none'}${t.provider && t.provider !== 'none' && !tts.UPLOAD_PROVIDERS.has(t.provider) ? `; voice set in Settings: ${(t.provider === 'aiawaaz' ? t.aiawaaz_voice : t.provider === 'elevenlabs' ? t.elevenlabs_voice : t.provider === 'openai' ? t.openai_voice : '') || "(the provider's default)"}. tts_generate always uses this voice (it has no voice argument; to change voice the user changes Settings).` : ''}${(!t.provider || t.provider === 'none') ? ' - no voice is configured, so audio will be silent and timing estimated. Tell the user once that they can add a voice in Settings, then carry on.' : ''}
+${tts.UPLOAD_PROVIDERS.has(t.provider) ? '- The voice-over is recorded OUTSIDE the app. Do NOT call tts_generate. In the Voice stage:\n  ' + tts.uploadNote(t.provider).split('\n').slice(1).join('\n  ') : ''}
 
 ## Working notes
 - Renders take time on this server: use stills and contact sheets to review, a 30-second draft for approval,
@@ -328,18 +367,41 @@ async function executeTool(r, p, name, a) {
       return { content: `Saved ${d.file} (${Math.round(d.bytes / 1024)} KB). Licence ${d.license}, by ${d.author}. Added to credits.md.` };
     }
     case 'tts_generate': {
+      // The voice always comes from Settings: the model kept inventing values like "Bunty / aiawaaz", which the
+      // provider rejects. So there is no voice argument any more.
       const film = readFilmJson(p);
       const lines = (film.narration || []).filter((l) => !a.ids || !a.ids.length || a.ids.includes(l.id));
       if (!lines.length) return { content: 'No matching narration lines in film.json.' };
+      const t = tts.settings();
+      const voiceKey = `${t.provider}:${t[`${t.provider}_voice`] || ''}`;
+      const metaFile = path.join(projectRoot(p), 'audio', '.tts.json'); // app-owned, not written by the model
+      let meta = {}; try { meta = JSON.parse(fs.readFileSync(metaFile, 'utf8')); } catch (_) {}
+      const sig = (l) => require('crypto').createHash('sha1').update(`${voiceKey}\n${l.text}`).digest('hex').slice(0, 16);
       const out = [];
       for (const l of lines) {
         if (r.cancelled) break;
         const rel = l.audio || `audio/${l.id}.mp3`;
         const f = safePath(p, rel, true);
-        if (fs.existsSync(f) && !a.force) { out.push(`${l.id}: exists (${(await ff.duration(f)).toFixed(2)} s)`); continue; }
+        if (fs.existsSync(f) && (!a.force || meta[l.id] === sig(l))) {
+          out.push(`${l.id}: kept (${(await ff.duration(f)).toFixed(2)} s)${a.force ? ', text and voice unchanged' : ''}`); continue;
+        }
         r.current = `voice ${l.id}`;
-        const res = await tts.synthesize(l.text, f, a.voice || null);
-        if (!res.ok) return { content: res.note };
+        let res;
+        try { res = await tts.synthesize(l.text, f, null); } catch (e) { res = { ok: false, note: e.message }; }
+        if (!res.ok) {
+          const err = String(res.note || 'unknown error');
+          store.addEvent(p.id, 'error', `Voice for ${l.id} failed: ${err.slice(0, 400)}`);
+          const kind = /voice reference|voice.*(invalid|not found)|unknown voice/i.test(err) ? 'the voice chosen in Settings is not accepted'
+            : /credit|quota|balance|insufficient|limit|402|payment/i.test(err) ? 'the voice account is out of credit or hit a limit'
+            : /401|403|api key|unauthori|forbidden/i.test(err) ? 'the voice API key is missing or wrong'
+            : 'the voice service returned an error';
+          return { content: `${out.length ? `Done before the failure:\n${out.join('\n')}\n\n` : ''}Voice generation failed on ${l.id}: ${err}\n\n` +
+            `Most likely: ${kind}. Tell the user this exact error in English (quote it) and what it likely means. ` +
+            `Do not ask them to re-select or re-test the voice unless the error is about the voice itself, and do not retry more than once. ` +
+            `You can keep working on scenes with estimated timing meanwhile.` };
+        }
+        meta[l.id] = sig(l);
+        try { fs.mkdirSync(path.dirname(metaFile), { recursive: true }); fs.writeFileSync(metaFile, JSON.stringify(meta, null, 1)); } catch (_) {}
         out.push(`${l.id}: ${res.seconds} s`);
         r.log(`voice ${l.id}: ${res.seconds} s`);
       }
@@ -363,7 +425,7 @@ async function executeTool(r, p, name, a) {
       for (let i = 0; i < a.ids.length; i++) {
         const dest = safePath(p, `audio/${a.ids[i]}.mp3`, true);
         fs.mkdirSync(path.dirname(dest), { recursive: true });
-        await ff.run(['-i', f, '-ss', String(cuts[i]), '-to', String(cuts[i + 1]), '-af', 'silenceremove=start_periods=1:start_threshold=-40dB,areverse,silenceremove=start_periods=1:start_threshold=-40dB,areverse', '-c:a', 'libmp3lame', '-q:a', '3', dest]);
+        await ff.run(['-ss', String(cuts[i]), '-to', String(cuts[i + 1]), '-i', f, '-af', 'silenceremove=start_periods=1:start_threshold=-40dB,areverse,silenceremove=start_periods=1:start_threshold=-40dB,areverse', '-c:a', 'libmp3lame', '-q:a', '3', dest]);
         out.push(`${a.ids[i]}: ${(await ff.duration(dest)).toFixed(2)} s`);
       }
       return { content: out.join('\n') };
@@ -373,6 +435,10 @@ async function executeTool(r, p, name, a) {
     case 'render_contact_sheet': return { content: fmtResult(await render(r, p, 'contact', { count: Math.min(24, Math.max(4, a.count || 12)) }, 'contact sheet')) + '\nLook at it with view_image.' };
     case 'render_draft': return { content: fmtResult(await render(r, p, 'film', { quality: 'draft', from: a.from || 0, to: a.to }, 'draft')) };
     case 'render_final': return { content: fmtResult(await render(r, p, 'film', { quality: 'final' }, 'final render')) };
+    case 'make_thumbnails': {
+      const res = await youtube.designThumbnails(p, projectRoot(p), (a.variants || []).slice(0, 4));
+      return { content: `Rendered ${res.files.join(', ')}. ${res.files[0]} is set as the upload thumbnail. Look at them with view_image and fix any that don't read well at small size.` };
+    }
     case 'view_image': {
       const f = safePath(p, a.path);
       if (!fs.existsSync(f)) return { content: 'Image not found.' };
@@ -405,21 +471,28 @@ async function loop(r) {
   try {
     let p = store.getProject(pid);
     fs.mkdirSync(path.join(projectRoot(p), 'uploads'), { recursive: true });
-    let provider = p.provider, model = p.model;
-    if (!provider) [provider, model] = llm.defaultProviderModel();
-    if (!provider) throw new llm.LLMError('No AI provider chosen. Set a default provider in Settings.');
+    const providers = llm.chain(p.provider || null, p.model || null);
+    if (!providers.length) throw new llm.LLMError('No AI provider set. Add a key and set the priority in Settings → AI models.');
+    let lastUsed = null;
     const system = systemPrompt(p);
     for (let step = 0; step < config.AGENT_MAX_STEPS; step++) {
       if (r.cancelled) { store.updateProject(pid, { status: 'stopped' }); store.addEvent(pid, 'system', 'Stopped'); return; }
       while (r.inbox.length) store.addMessage(pid, { role: 'user', text: r.inbox.shift() });
       p = store.getProject(pid);
+      const stepStart = Date.now(), stepStage = p.stage; // for the time estimate: agent working time per stage
+      const countStep = () => eta.addWork(pid, stepStage, (Date.now() - stepStart) / 1000);
       const msgs = await prepareMessages(p, store.getMessages(pid));
       r.current = 'thinking';
-      const res = await llm.chat(provider, model, system, msgs, TOOLS);
+      const res = await llm.chatChain(providers, system, msgs, TOOLS, 8192, (from, to, err) =>
+        store.addEvent(pid, 'system', `⚠️ ${llm.PROVIDERS[from]?.label || from} failed (${err}). Switching to ${llm.PROVIDERS[to]?.label || to}.`));
       r.current = null;
+      if (lastUsed && res.provider !== lastUsed) store.addEvent(pid, 'system', `🤖 Now using ${llm.PROVIDERS[res.provider]?.label || res.provider} · ${res.model}`);
+      lastUsed = res.provider;
+      try { llm.recordUsage(res, pid); } catch (_) {}
       store.addMessage(pid, { role: 'assistant', text: res.text, tool_calls: res.tool_calls });
       if (res.text) store.addEvent(pid, 'assistant', res.text, { usage: res.usage });
       if (!res.tool_calls || !res.tool_calls.length) {
+        countStep();
         if (r.inbox.length) continue;
         store.updateProject(pid, { status: 'idle' });
         store.addEvent(pid, 'waiting', res.text || 'The agent paused.');
@@ -444,6 +517,7 @@ async function loop(r) {
           store.addEvent(pid, 'done', a.summary || 'Film finished', a);
           store.addMessage(pid, { role: 'tool', tool_call_id: tc.id, name, content: 'Recorded. The user will review the final film.' });
           if (p.idea_id) { const idea = store.getIdea(p.idea_id); if (idea && ['idea', 'research', 'production'].includes(idea.status)) store.updateIdea(idea.id, { status: 'scheduled' }); }
+          countStep(); try { eta.learn(store.getProject(pid)); } catch (_) {}
           finished = true;
           continue;
         }
@@ -457,6 +531,7 @@ async function loop(r) {
         store.addMessage(pid, msg);
         store.addEvent(pid, 'tool_result', clip(out.content, 4000), { name });
       }
+      if (!finished) countStep();
       if (paused || finished) return;
     }
     store.updateProject(pid, { status: 'idle' });
@@ -486,7 +561,8 @@ function manualRender(pid, quality = 'final') {
 }
 
 module.exports = {
+  filmLanguage,
   manualRender,
   STAGES, TOOLS, projectRoot, safePath, isRunning, liveOutput, start, stop, sendUserMessage, respondApproval,
-  kickoff, resetConversation, systemPrompt, prepareMessages, RUNNERS,
+  kickoff, resetConversation, systemPrompt, prepareMessages, RUNNERS, executeTool,
 };

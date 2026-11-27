@@ -12,6 +12,86 @@ const SIZES = {
 const TRANSITIONS = new Set(['cut', 'fade', 'dip', 'flash']);
 const BACKGROUNDS = new Set(['cork', 'paper', 'blueprint', 'night', 'studio', 'black']);
 
+// Rough boxes (fractions of the frame) for text-like elements, to catch text printed on top of text and text that runs
+// off the screen. Photos and documents may overlap each other on purpose (a pinned board), so they are not compared.
+function textBox(el, W, H) {
+  const ar = H / W;
+  const est = (txt, size, maxW) => {
+    const oneLine = String(txt || '').length * size * 0.55 * ar; // average glyph ≈ half the font height
+    const w = Math.min(maxW, Math.max(oneLine, size * ar));
+    const lines = Math.max(1, Math.ceil(oneLine / maxW));
+    return [w, lines * size * 1.25];
+  };
+  let w, h, x = el.x ?? 0.5, y = el.y ?? 0.5;
+  switch (el.type) {
+    case 'text': [w, h] = est(el.text, el.size || 0.05, el.w || 0.8); if (el.align === 'left') x += w / 2; if (el.align === 'right') x -= w / 2; break;
+    case 'title': [w, h] = est(el.text, el.size || 0.11, el.w || 0.8); y = el.y ?? 0.47; if (el.sub) h += (el.size || 0.11) * 0.8; break;
+    case 'label': { // size is a fraction of the frame WIDTH (default 0.016), typewriter font ≈ 0.6 em per letter
+      const px = el.size || 0.016;
+      w = String(el.text || '').length * px * 0.62 + px * 1.2; h = px * 1.9 / ar; break;
+    }
+    case 'counter': { const sz = el.size || 0.12; [w, h] = est(`${el.prefix || ''}${el.to ?? ''}${el.suffix || ''}`, sz, 0.9); if (el.label) h += sz * 0.6; break; }
+    case 'stamp': w = el.w || 0.22; h = w * 0.33 / ar; break;
+    case 'cta': [w, h] = est(el.text, el.size || 0.05, el.w || 0.62); w += 0.06; h += 0.09; break;
+    default: return null;
+  }
+  return { id: el.id, type: el.type, x0: x - w / 2, x1: x + w / 2, y0: y - h / 2, y1: y + h / 2, w, h };
+}
+function layoutWarnings(elements, W, H, camera) {
+  const out = [];
+  const boxes = elements.map((el) => textBox(el, W, H)).filter(Boolean);
+  for (const b of boxes) {
+    // camera push-ins crop a few percent at the edges, so keep text 3% inside the frame
+    // where the box lands on screen at each camera keyframe (zoom around the camera centre)
+    const keys = (Array.isArray(camera) && camera.length ? camera : [{}]).map((k) => ({ z: +k.zoom || 1, cx: k.x ?? 0.5 }));
+    const sx0 = Math.min(...keys.map((k) => (b.x0 - k.cx) * k.z + 0.5)), sx1 = Math.max(...keys.map((k) => (b.x1 - k.cx) * k.z + 0.5));
+    if (b.type !== 'stamp' && (sx0 < 0.03 || sx1 > 0.97)) out.push(`${b.id} (${b.type}) is about ${Math.round(b.w * 100)}% of the frame wide and may be cut off at the ${sx0 < 0.03 ? 'left' : 'right'} edge${keys.some((k) => k.z > 1.02) ? ' when the camera zooms in' : ''}; shorten the text, move it or lower "size".`);
+  }
+  for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+    const a = boxes[i], b = boxes[j];
+    const ix = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0), iy = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+    if (ix <= 0 || iy <= 0) continue;
+    const share = (ix * iy) / Math.min(a.w * a.h, b.w * b.h);
+    if (share > 0.3) out.push(`${a.id} (${a.type}) and ${b.id} (${b.type}) are printed on top of each other; move one (give it its own x/y) or let one exit first.`);
+  }
+  return out;
+}
+
+// Retention: viewers leave when nothing new happens. Collect every moment something changes on screen (cut, element
+// appearing, camera move) and flag long static stretches, a slow start, and Shorts that open on a title card.
+function retentionWarnings(scenes, total, vertical) {
+  const out = [];
+  const events = [];
+  for (const sc of scenes) {
+    events.push(sc.start);
+    for (const el of sc.elements || []) {
+      try { events.push(sc.start + sc.resolveAt(el.enter && el.enter.at != null ? el.enter.at : 0)); } catch (_) { /* bad at: reported elsewhere */ }
+    }
+    const cam = Array.isArray(sc.camera) ? sc.camera : sc.camera && Array.isArray(sc.camera.keys) ? sc.camera.keys : [];
+    cam.slice(1).forEach((k) => { try { events.push(sc.start + sc.resolveAt(k.at ?? k.t ?? 0)); } catch (_) { /* */ } });
+  }
+  const ev = [...new Set(events.filter((x) => x >= 0 && x <= total).map((x) => +x.toFixed(2)))].sort((a, b) => a - b);
+  ev.push(total);
+  const limit = vertical ? 4 : 8;
+  let worst = 0;
+  for (let i = 1; i < ev.length; i++) {
+    const gap = ev[i] - ev[i - 1];
+    const isTail = i === ev.length - 1; // the ending may hold a little longer (fade out, end screen)
+    if (gap > limit + (isTail ? 3 : 0)) {
+      if (worst++ < 4) out.push(`Retention: nothing new appears on screen from ${ev[i - 1].toFixed(1)} s to ${ev[i].toFixed(1)} s (${gap.toFixed(1)} s). Add a photo, a zoom to a detail, a label or a cut; ${vertical ? 'Shorts need a change every 2-4 s' : 'aim for a change every 3-6 s'}.`);
+    }
+  }
+  if (worst > 4) out.push(`Retention: ${worst - 4} more static stretches like these.`);
+  const first = scenes[0];
+  if (first) {
+    const firstLine = first.lines && first.lines[0];
+    if (firstLine && first.start + firstLine.start > 1.5) out.push(`Retention: the narration starts at ${(first.start + firstLine.start).toFixed(1)} s. Start talking within the first second; the first 3 seconds decide whether people stay.`);
+    if (vertical && (first.elements || []).some((el) => el.type === 'title' && (el.enter?.at ?? 0) === 0) && first.dur > 2)
+      out.push('Retention: this Short opens on a title card. Open on the most surprising image or fact instead; put the title later or leave it out.');
+  }
+  return out;
+}
+
 function wordsDuration(text) {
   const words = String(text || '').trim().split(/\s+/).filter(Boolean).length;
   return Math.max(1.2, words / 2.55 + 0.25); // ~153 wpm narration estimate
@@ -144,17 +224,45 @@ async function buildTimeline(dir, opts = {}) {
           errors.push(`Scene ${id}, element ${el.id}: ${ref} "${el[ref]}" is not an element id in this scene.`);
       }
     });
+    layoutWarnings(sc.elements || [], W, H, sc.camera).forEach((w) => warnings.push(`Scene ${id}: ${w}`));
     scenes.push(scene);
     t += dur;
   });
   if (!scenes.length) errors.push('film.json has no scenes.');
   const unused = narration.filter((l) => !used.has(l.id)).map((l) => l.id);
   if (unused.length) warnings.push(`Narration not placed in any scene: ${unused.join(', ')}.`);
-  if (film.music?.file && !fs.existsSync(path.join(dir, film.music.file))) errors.push(`Music file ${film.music.file} not found.`);
+  // downloaded photos that never appear in the film
+  let imgs = [];
+  try { imgs = fs.readdirSync(path.join(dir, 'images')).filter((f) => /\.(jpe?g|png|webp|gif)$/i.test(f)).map((f) => `images/${f}`); } catch (_) { /* no folder */ }
+  const usedImgs = new Set();
+  for (const sc of film.scenes || []) {
+    if (sc.background && typeof sc.background === 'object' && sc.background.image) usedImgs.add(sc.background.image);
+    for (const el of sc.elements || []) if (el.src) usedImgs.add(el.src);
+  }
+  const unusedImgs = imgs.filter((f) => !usedImgs.has(f));
+  const photoScenes = (film.scenes || []).filter((sc) => (sc.elements || []).some((el) => el.src) || (sc.background && sc.background.image)).length;
+  if (imgs.length && !usedImgs.size) {
+    errors.push(`The film shows none of the ${imgs.length} images in images/ (${imgs.slice(0, 6).join(', ')}). A documentary needs its real photos: add "photo" elements (src: "images/…") or image backgrounds to the scenes. Set "noPhotos": true in film.json only if the user asked for a text-only film.`);
+    if (film.noPhotos) errors.pop();
+  } else if (unusedImgs.length) {
+    warnings.push(`Images downloaded but not used: ${unusedImgs.join(', ')}.`);
+  }
+  if (imgs.length && (film.scenes || []).length >= 4 && photoScenes / film.scenes.length < 0.5 && !film.noPhotos)
+    warnings.push(`Only ${photoScenes} of ${film.scenes.length} scenes show a real image. Aim for a photo, document or map in most scenes.`);
+  if (film.music?.file && !fs.existsSync(path.join(dir, film.music.file))) {
+    // a missing track shouldn't block the film: render without music and say so
+    if (film.music.mood) warnings.push(`Music file ${film.music.file} not found, so the generated "${film.music.mood}" music is used instead.`);
+    else { warnings.push(`Music file ${film.music.file} not found, so the film has no music. Upload a track (Files tab → uploads/), or use generated music: "music": {"mood": "wonder"}.`); film.music = null; }
+  }
 
+  retentionWarnings(scenes, t, H > W).forEach((w) => warnings.push(w));
+  if ((film.aspect === '9:16' || opts.aspect === '9:16') && t > 180) warnings.push(`This is ${Math.round(t)} s long. YouTube only treats vertical videos up to 3 minutes (180 s) as Shorts; cut lines or scenes.`);
   return {
     film, dir, look, W, H, fps, scenes, total: t, audio, errors, warnings,
-    captions: film.captions !== false, letterbox: !!film.letterbox,
+    captions: film.captions !== false,
+    // "animated" (default): big words lit up as they're spoken; "classic": plain subtitle box
+    captionStyle: (typeof film.captions === 'string' ? film.captions : (film.captions && film.captions.style)) === 'classic' ? 'classic' : 'animated',
+    captionColor: (film.captions && film.captions.color) || null, letterbox: !!film.letterbox,
   };
 }
 

@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const store = require('./store');
 const llm = require('./llm');
+const seo = require('./seo');
 const ff = require('./renderer/ffmpeg');
 const config = require('./config');
 
@@ -82,7 +83,7 @@ function disconnect() {
 }
 
 // ---------------------------------------------------------------- metadata
-const ALLOWED = ['title', 'description', 'tags', 'chapters', 'title_options', 'thumbnail_ideas', 'category_id', 'privacy', 'publish_at', 'language', 'thumbnail_path'];
+const ALLOWED = ['title', 'description', 'tags', 'chapters', 'title_options', 'thumbnail_ideas', 'category_id', 'privacy', 'publish_at', 'language', 'thumbnail_path', 'thumbnail_designs', 'pinned_comment', 'hashtags', 'focus_keyword', 'localized'];
 function saveMeta(pid, data) {
   const fields = {};
   for (const k of ALLOWED) if (k in data) fields[k] = data[k];
@@ -115,6 +116,46 @@ function gatherContext(p, root) {
   return parts.join('\n\n');
 }
 
+// YouTube language code for a film (Hindi and Hinglish videos are tagged as Hindi)
+const langCode = (p) => seo.langCode(p, (store.getSetting('channel', {}) || {}).language);
+// the second language for the title/description: English for Indian-language videos, Hindi for English ones
+const otherLang = (p) => (langCode(p) === 'en' ? 'hi' : 'en');
+const otherLangName = (p) => (otherLang(p) === 'en' ? 'English' : 'Hindi (Devanagari)');
+
+// ---------------------------------------------------------------- designed thumbnails
+// Renders thumbnail variants (out/thumb_N.png). With no specs given, the AI designs 3 from the film's photos.
+async function designThumbnails(p, root, specs = null) {
+  const imgDir = path.join(root, 'images');
+  const images = fs.existsSync(imgDir) ? fs.readdirSync(imgDir).filter((f) => /\.(jpe?g|png|webp)$/i.test(f)).map((f) => `images/${f}`) : [];
+  if (!specs) {
+    if (!images.length) throw new Error('This film has no photos in images/ to build a thumbnail from.');
+    let credits = '';
+    try { credits = fs.readFileSync(path.join(root, 'credits.md'), 'utf8').slice(0, 2500); } catch (_) {}
+    const ch = store.getSetting('channel', {}) || {};
+    const m = store.getMeta(p.id) || {};
+    const prompt = `Design 3 different YouTube thumbnails for this documentary. They must make people click on a phone screen.
+Title: ${m.title || p.title}
+Topic: ${p.topic || ''}
+Language of the video: ${p.language || ch.language || 'English'} (thumbnail text in that language; Hinglish -> short English or Hindi words)
+Photos available (use exact paths): ${images.join(', ')}
+Photo descriptions (from credits): ${credits || '(none)'}
+Rules: 2-5 words of text that create curiosity and do NOT repeat the title; one highlighted word; pick the most dramatic photo;
+"focus" is the point of interest in that photo (0-1 fractions); use circle/arrow only when there is a clear object to point at;
+vary the 3 designs (different photo, wording or side). "badge" optional (a year or 1-2 words).
+Reply with JSON: {"thumbnails": [{"image": "images/…", "text": "…", "highlight": "word", "side": "left|right", "focus": {"x": 0.5, "y": 0.4}, "circle": true, "arrow": false, "badge": "1903", "color": "yellow|red|white"}]}`;
+    const data = await llm.completeJson(prompt, 'You are a top YouTube thumbnail designer. Reply with JSON only.', null, null, p.id);
+    specs = (data.thumbnails || []).filter((t) => t && t.text);
+    if (!specs.length) throw new Error('The AI did not return any thumbnail designs. Try again.');
+  }
+  specs = specs.map((t) => ({ ...t, image: images.includes(t.image) ? t.image : images[0] }));
+  const { runJob } = require('./renderer');
+  const res = await runJob('thumbnails', root, { specs }).promise;
+  const cur = (store.getMeta(p.id) || {}).thumbnail_path;
+  if (!cur || /^out\/thumb_\d\.png$/.test(cur)) saveMeta(p.id, { thumbnail_path: res.files[0] });
+  saveMeta(p.id, { thumbnail_designs: specs });
+  return { files: res.files, specs };
+}
+
 async function generateMetadata(p, root) {
   const ch = store.getSetting('channel', {}) || {};
   const prompt = `Write YouTube metadata for a documentary video.
@@ -122,26 +163,45 @@ async function generateMetadata(p, root) {
 Channel: ${ch.name || ''}
 Channel style / audience: ${ch.style || ''}
 Default description footer: ${ch.footer || ''}
-Language: ${ch.language || 'English'}
+Language: ${p.language || ch.language || 'English'} (write the title, description and tags in this language; for Hinglish use Hindi with English words, in a mix of Devanagari and English letters)${p.aspect === '9:16' ? '\nThis is a YouTube SHORT (vertical, under 3 minutes): title under 60 characters, 1-3 line description, end the description with #Shorts and 2 topic hashtags, no chapters.' : ''}
 Video title (working): ${p.title}
 Topic: ${p.topic || ''}
 
 Project files (script, beat table, captions, credits, chapters):
 ${gatherContext(p, root) || '(no files yet - use the topic)'}
 
+What makes people click (use it, honestly): a specific number or date, a surprising contrast ("They laughed. Then…"),
+an open question, stakes or a mystery, the most dramatic moment. Put the strongest words first (phones cut long titles).
+No clickbait that the video doesn't deliver, no ALL CAPS titles, max one emoji.
+
 Return JSON only, with this shape:
 {
- "title_options": ["5 strong, honest, curiosity-driven titles under 70 characters"],
+ "title_options": [{"title": "under 70 characters (Shorts: under 60)", "score": 1-10, "why": "what makes it clickable, 5-10 words"}],  // 5 options, different angles
  "title": "the best of them",
  "description": "2-3 hook paragraphs, then a CHAPTERS block (one 'M:SS Label' per line, first 0:00, taken from chapters.txt when present), then a SOURCES & IMAGE CREDITS block built from credits.md (keep every attribution and licence), then the footer. At most 3 hashtags, at the very end.",
  "tags": ["15-25 search tags"],
  "chapters": [{"time": "0:00", "label": "..."}],
- "thumbnail_ideas": ["4 thumbnail concepts: image + 2-4 word overlay text"]
+ "thumbnail_ideas": ["4 thumbnail concepts: image + 2-4 word overlay text"],
+ "focus_keyword": "the main search phrase people would type to find this video (2-4 words, in the language people search in)",
+ "hashtags": ["3 hashtags, most specific first"],
+ "localized": {"${otherLang(p)}": {"title": "the chosen title translated/adapted for ${otherLangName(p)} searchers", "description": "the first 2-3 paragraphs of the description in ${otherLangName(p)} (no chapters/credits)"}},
+ "pinned_comment": "a short question for viewers to answer in the comments, tied to the video (e.g. 'Would you have flown with them in 1903?')"
 }
+The description's first line is a hook sentence (it shows in search results) containing the focus keyword, then a
+summary using the main search keywords naturally (long videos: 150-300 words before the chapters). Tags: the focus
+keyword, spelling variants, names, places, years, the topic in both English and the video's language.
 Never invent facts that are not in the script.`;
-  const data = await llm.completeJson(prompt);
+  const data = await llm.completeJson(prompt, undefined, null, null, p.id);
   const out = {};
-  for (const k of ['title', 'description', 'tags', 'chapters', 'title_options', 'thumbnail_ideas']) if (data[k] != null) out[k] = data[k];
+  for (const k of ['title', 'description', 'tags', 'chapters', 'title_options', 'thumbnail_ideas', 'hashtags', 'pinned_comment', 'focus_keyword', 'localized']) if (data[k] != null) out[k] = data[k];
+  const cur = store.getMeta(p.id) || {};
+  if (!cur.language || cur.language === 'en') out.language = langCode(p); // the film's language (Hindi films were tagged English)
+  // best-scored title first; accept plain strings from models that ignore the object shape
+  if (Array.isArray(out.title_options)) {
+    out.title_options = out.title_options.map((t) => (typeof t === 'string' ? { title: t } : t)).filter((t) => t && t.title)
+      .sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 6);
+    if (!out.title && out.title_options[0]) out.title = out.title_options[0].title;
+  }
   return saveMeta(p.id, out);
 }
 
@@ -171,16 +231,29 @@ function startUpload(p, root) {
 async function upload(p, root) {
   const pid = p.id;
   try {
-    const m = store.getMeta(pid);
+    let m = store.getMeta(pid);
     const video = p.final_video ? path.join(root, p.final_video) : null;
     if (!video || !fs.existsSync(video)) throw new Error('Final video file not found. Finish the film first.');
+    // SEO autopilot: never upload without a title, description and tags
+    if (!m.title || !m.description || !(m.tags || []).length) {
+      store.saveMeta(pid, { upload_status: 'writing title, description and tags' });
+      await generateMetadata(p, root);
+      m = store.getMeta(pid);
+    }
     if (!m.title) throw new Error('Add a title (or generate metadata) first.');
-    const status = { privacyStatus: m.privacy || 'private', selfDeclaredMadeForKids: false, containsSyntheticMedia: false };
+    let duration = 0;
+    try { duration = await ff.duration(video); } catch (_) { /* chapters are checked without it */ }
+    const lang = seo.uploadLang(p, m, (store.getSetting('channel', {}) || {}).language);
+    const fix = seo.prepare(p, m, root, { duration, lang });
+    const status = { privacyStatus: m.privacy || 'private', selfDeclaredMadeForKids: false, containsSyntheticMedia: false, embeddable: true, publicStatsViewable: true, license: 'youtube' };
     if (m.publish_at) { status.privacyStatus = 'private'; status.publishAt = m.publish_at; }
-    const body = { snippet: { title: m.title.slice(0, 100), description: (m.description || '').slice(0, 5000), tags: m.tags || [],
-      categoryId: String(m.category_id || '27'), defaultLanguage: m.language || 'en', defaultAudioLanguage: m.language || 'en' }, status };
+    const body = { snippet: { title: fix.title, description: fix.description, tags: fix.tags,
+      categoryId: String(m.category_id || '27'), defaultLanguage: lang, defaultAudioLanguage: lang }, status };
+    const parts = ['snippet', 'status'];
+    if (Object.keys(fix.localizations).length) { body.localizations = fix.localizations; parts.push('localizations'); }
+    store.saveMeta(pid, { seo_applied: fix.fixes });
     const size = fs.statSync(video).size;
-    const init = await fetch('https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status', {
+    const init = await fetch(`https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=${parts.join(',')}`, {
       method: 'POST', body: JSON.stringify(body),
       headers: { authorization: `Bearer ${await accessToken()}`, 'content-type': 'application/json; charset=UTF-8', 'x-upload-content-type': 'video/mp4', 'x-upload-content-length': String(size) },
     });
@@ -216,13 +289,15 @@ async function upload(p, root) {
     store.saveMeta(pid, { youtube_id: videoId, upload_status: 'processing captions/thumbnail', upload_progress: 100 });
     const notes = [];
     if (p.final_srt && fs.existsSync(path.join(root, p.final_srt))) {
-      try { await uploadCaptions(videoId, path.join(root, p.final_srt), m.language || 'en'); notes.push('captions added'); }
+      try { await uploadCaptions(videoId, path.join(root, p.final_srt), lang); notes.push('captions added'); }
       catch (e) { notes.push(`captions failed: ${e.message}`); }
     }
     if (m.thumbnail_path && fs.existsSync(path.join(root, m.thumbnail_path))) {
       try { await uploadThumbnail(videoId, path.join(root, m.thumbnail_path)); notes.push('thumbnail set'); }
       catch (e) { notes.push(`thumbnail failed (custom thumbnails need a verified channel): ${e.message}`); }
     }
+    if (fix.fixes.length) notes.push(`SEO: ${fix.fixes.join(', ')}`);
+    if (Object.keys(fix.localizations).length) notes.push(`title also in ${Object.keys(fix.localizations).join(', ')}`);
     store.saveMeta(pid, { upload_status: 'done' + (notes.length ? ` (${notes.join('; ')})` : '') });
     if (p.idea_id) store.updateIdea(p.idea_id, { status: m.publish_at || status.privacyStatus === 'private' ? 'scheduled' : 'published' });
     store.addEvent(pid, 'system', `Uploaded to YouTube: https://youtu.be/${videoId}`);
@@ -250,4 +325,4 @@ async function uploadThumbnail(videoId, file) {
 }
 
 module.exports = { CATEGORIES, REDIRECT_PATH, publicUrl, redirectUri, creds, authUrl, exchangeCode, accessToken, disconnect,
-  saveMeta, generateMetadata, extractThumbnail, startUpload };
+  saveMeta, generateMetadata, extractThumbnail, startUpload, designThumbnails, langCode };

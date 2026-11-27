@@ -19,7 +19,7 @@ const STATUS = { running: false, username: null, error: null, mode: null };
 let bot = null;
 
 const COMMANDS = [
-  ['films', 'List films'], ['film', 'Film card: /film 3'], ['new', 'New film: /new Title | topic | 90'],
+  ['films', 'List films'], ['film', 'Film card: /film 3'], ['new', 'New film: /new Title | topic | 90'], ['short', 'New YouTube Short: /short Title | topic | 60'],
   ['use', 'Set active film: /use 3'], ['status', "What's running and what needs you"],
   ['approve', 'Approve the pending step (optional note)'], ['changes', 'Request changes: /changes text'],
   ['say', 'Message the agent (or just type)'], ['resume', 'Start / resume the agent'], ['stop', 'Stop the agent'],
@@ -38,7 +38,8 @@ const HELP = `<b>Documentary Studio bot</b>
 
 <b>Films</b>
 /films · /film 3 · /use 3 (set the active film)
-/new Title | topic | 90 | 16:9: create and start a film
+/new Title | topic | 90 | 16:9 | Hindi: create and start a film
+/short Title | topic | 60 | Hinglish: create a vertical YouTube Short
 /status: what's running and what needs you
 
 <b>Agent</b> (acts on the active film, or put the film number first)
@@ -224,9 +225,11 @@ async function showMeta(chat, pid, regenerate = false) {
   const p = store.getProject(pid);
   let m = store.getMeta(pid);
   if (regenerate || !m.title) { await send(chat, '✨ Writing title, description, tags and chapters…'); m = await youtube.generateMetadata(p, rootOf(pid)); }
-  const opts = m.title_options || [];
+  const opts = (m.title_options || []).map((o) => (typeof o === 'string' ? { title: o } : o));
   const t = [`📝 <b>#${pid} YouTube metadata</b>`, `<b>Title:</b> ${e(m.title)}`];
-  if (opts.length) t.push('<b>Options:</b>\n' + opts.map((o, i) => `${i + 1}. ${e(o)}`).join('\n'));
+  if (opts.length) t.push('<b>Options:</b>\n' + opts.map((o, i) => `${i + 1}. ${e(o.title)}${o.score ? ` <i>(${o.score}/10)</i>` : ''}`).join('\n'));
+  if (m.pinned_comment) t.push(`<b>Pinned comment idea:</b> ${e(m.pinned_comment)}`);
+  try { const a = require('./seo').audit(p, m, rootOf(pid)); t.push(`<b>SEO score:</b> ${a.score}/100${a.score < 80 ? ` (missing: ${e(a.checks.filter((c) => !c.ok).map((c) => c.msg).slice(0, 3).join('; '))})` : ''}. Gaps are filled automatically on upload.`); } catch (_) { /* optional */ }
   t.push(`<b>Tags:</b> ${e((m.tags || []).join(', '))}`);
   t.push(`<b>Visibility:</b> ${e(m.privacy)}${m.publish_at ? ` · <b>scheduled</b> ${e(fmtLocal(new Date(m.publish_at)))}` : ''}`);
   if ((m.chapters || []).length) t.push('<b>Chapters:</b>\n' + m.chapters.slice(0, 20).map((c) => `${e(c.time)} ${e(c.label)}`).join('\n'));
@@ -266,14 +269,23 @@ H.films = async (c) => {
 H.film = (c, a) => filmCard(c, resolvePid(c, a.trim() || null));
 H.use = async (c, a) => { const pid = resolvePid(c, a.trim()); setChat(c, { active: pid }); await send(c, `📌 Active film is now #${pid}.`); await filmCard(c, pid); };
 H.new = async (c, a) => {
-  if (!a.trim()) { setChat(c, { wait: { kind: 'new' } }); return send(c, 'Send the new film as:\n<code>Title | topic and angle | seconds | 16:9</code>\nOnly the title is required.'); }
+  if (!a.trim()) { setChat(c, { wait: { kind: 'new' } }); return send(c, 'Send the new film as:\n<code>Title | topic and angle | seconds | 16:9 or short | English/Hindi/Hinglish</code>\nOnly the title is required. Or use /short for a YouTube Short.'); }
   const parts = a.split('|').map((s) => s.trim());
   const body = { title: parts[0], topic: parts[1] || parts[0] };
   if (/^\d+$/.test(parts[2] || '')) body.duration_s = +parts[2];
   if (['16:9', '9:16', '1:1'].includes(parts[3])) body.aspect = parts[3];
+  if (/^shorts?$/i.test(parts[3] || '')) body.aspect = '9:16';
+  const lang = (parts[4] || '').toLowerCase();
+  if (lang) body.language = lang.startsWith('hing') ? 'Hinglish' : lang.startsWith('hi') ? 'Hindi' : lang.startsWith('en') ? 'English' : parts[4];
   const p = services.createProject(body, true);
   setChat(c, { active: p.id, wait: null });
   await send(c, `🎬 Created <b>#${p.id} ${e(p.title)}</b> and started the agent. It's now your active film.\nI'll message you when it needs your approval.`, kb(appLinkRow(p.id)));
+};
+// /short Title | topic | seconds | language  -> a vertical YouTube Short
+H.short = async (c, a) => {
+  if (!a.trim()) return send(c, 'Send: <code>/short Title | topic and angle | seconds | English/Hindi/Hinglish</code>\nShorts are vertical (9:16) and at most 3 minutes; 45-60 s works best.');
+  const parts = a.split('|').map((s) => s.trim());
+  return H.new(c, [parts[0], parts[1] || '', parts[2] || '60', 'short', parts[3] || ''].join(' | '));
 };
 H.status = async (c) => {
   const rows = store.projects();
@@ -286,7 +298,8 @@ H.status = async (c) => {
     '✋ Needs approval: ' + (waiting.map((p) => `#${p.id} ${e(p.title)}`).join(', ') || 'none'),
     '⚠️ Errors: ' + (errors.map((p) => `#${p.id} ${e(p.title)}`).join(', ') || 'none'),
     '⬆️ Uploads: ' + (ups.map((m) => `#${m.project_id} ${m.upload_progress}%`).join(', ') || 'none'),
-    `🤖 Default AI: ${e(prov || 'not set')} ${e(model || '')}`,
+    `🤖 AI: ${e(llm.priorityList().join(' → ') || 'not set')}`,
+    (() => { const m = (store.getSetting('usage_monthly', {}) || {})[new Date().toISOString().slice(0, 7)]; return `💰 AI cost this month: ${m ? '$' + m.cost.toFixed(2) + ` (${m.calls} calls)` : '$0'}`; })(),
     `▶️ YouTube: ${e(yt.channel_title || (yt.refresh_token ? 'connected' : 'not connected'))}`].join('\n'),
   waiting.length ? kb(waiting.slice(0, 4).map((p) => btn(`✋ #${p.id} review`, `f:${p.id}`))) : null);
 };
@@ -422,8 +435,9 @@ H.calendar = async (c) => {
 H.models = async (c) => {
   const saved = store.getSetting('providers', {}) || {};
   const [prov, model] = llm.defaultProviderModel();
-  await send(c, ['🤖 <b>AI providers</b>', ...Object.entries(llm.PROVIDERS).map(([k, v]) => { const s = saved[k] || {}; return `${s.api_key || (k === 'custom' && s.base_url) ? '✅' : '▫️'} <code>${k}</code> ${e(v.label)}${s.model ? ' · ' + e(s.model) : ''}`; }),
-    `\nDefault: <b>${e(prov || 'not set')}</b> ${e(model || '')}`, 'Add keys in the web app (Settings → AI models).'].join('\n'));
+  await send(c, ['🤖 <b>AI providers</b>', ...Object.entries(llm.PROVIDERS).map(([k, v]) => { const s = saved[k] || {}; return `${s.api_key || (k === 'custom' ? s.base_url : v.no_key) ? '✅' : '▫️'} <code>${k}</code> ${e(v.label)}${s.model ? ' · ' + e(s.model) : ''}`; }),
+    `\nPriority: <b>${e(llm.priorityList().join(' → ') || 'not set')}</b>`, ...Object.entries(llm.providerStatus()).map(([k, v]) => `⏸ ${e(k)} paused ${v.minutes_left} min: ${e(v.reason)}`),
+    'If one fails (limit, quota, error) the next one takes over. Change the order in Settings → AI models, or /model default &lt;provider&gt;.'].join('\n'));
 };
 H.model = async (c, a) => {
   const parts = a.trim().split(/\s+/).filter(Boolean);
@@ -433,8 +447,11 @@ H.model = async (c, a) => {
   }
   if (parts[0] === 'default') {
     if (!llm.PROVIDERS[parts[1]]) return send(c, 'Usage: /model default <provider> [model]');
-    store.setSetting('default_llm', { provider: parts[1], model: parts[2] || '' });
-    return send(c, `✓ Default AI: ${e(parts[1])} ${e(parts[2] || '')}`);
+    // move it to the top of the priority list; the others stay as fallbacks
+    store.setSetting('llm_priority', [parts[1], ...llm.priorityList().filter((k) => k !== parts[1])]);
+    if (parts[2]) { const pr = store.getSetting('providers', {}) || {}; store.setSetting('providers', { ...pr, [parts[1]]: { ...(pr[parts[1]] || {}), model: parts[2] } }); }
+    store.setSetting('default_llm', { provider: parts[1], model: llm.modelFor(parts[1]) });
+    return send(c, `✓ ${e(parts[1])} ${e(llm.modelFor(parts[1]))} is now first.\nPriority: ${e(llm.priorityList().join(' → '))}`);
   }
   const [pid, rest] = splitPid(c, a);
   const rp = rest.trim().split(/\s+/).filter(Boolean);
@@ -520,7 +537,7 @@ async function handleCallback(q) {
       lg: () => send(chat, `📜 <b>#${pid} activity</b>\n${logText(pid)}`), fl: () => H.files(chat, String(pid)), vd: () => H.video(chat, String(pid)),
       sl: () => H.stills(chat, String(pid)), md: () => showMeta(chat, pid), mg: () => showMeta(chat, pid, true), up: () => confirmUpload(chat, pid),
       pv: () => H.privacy(chat, `${pid} ${a2}`), x: () => send(chat, 'Cancelled.'),
-      tt: () => { const opts = store.getMeta(pid).title_options || []; if (opts[+a2]) { youtube.saveMeta(pid, { title: opts[+a2] }); return send(chat, `✓ Title: <b>${e(opts[+a2])}</b>`); } return null; },
+      tt: () => { const o = (store.getMeta(pid).title_options || [])[+a2]; const title = o && (typeof o === 'string' ? o : o.title); if (title) { youtube.saveMeta(pid, { title }); return send(chat, `✓ Title: <b>${e(title)}</b>`); } return null; },
       upok: async () => { await youtube.accessToken(); return send(chat, youtube.startUpload(store.getProject(pid), rootOf(pid)) ? `⬆️ Uploading #${pid}… I'll tell you when it's on YouTube.` : 'An upload is already running.'); },
       ap: () => approve(chat, String(pid), a2 === 'y'),
     };

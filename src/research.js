@@ -4,7 +4,34 @@ const fs = require('fs');
 const path = require('path');
 const store = require('./store');
 
-const UA = { 'User-Agent': 'DocumentaryStudio/2.0 (documentary research; contact via site owner)' };
+// Wikimedia requires a descriptive User-Agent with a way to contact the operator, or it throttles/blocks requests.
+const UA = { 'User-Agent': 'DocumentaryStudio/2.1 (https://github.com/DineshTechs/documentaryAI; documentary research tool) Node.js', 'Api-User-Agent': 'DocumentaryStudio/2.1 (https://github.com/DineshTechs/documentaryAI)' };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// One request to Wikimedia at a time, at a polite pace, and wait-and-retry when it says "slow down" (429/503).
+let wmQueue = Promise.resolve(), wmLast = 0;
+function wmFetch(url, opts = {}, gapMs = 1000) {
+  const run = async () => {
+    for (let attempt = 0; ; attempt++) {
+      const wait = wmLast + gapMs - Date.now();
+      if (wait > 0) await sleep(wait);
+      wmLast = Date.now();
+      const r = await fetch(url, { ...opts, headers: { ...UA, ...(opts.headers || {}) } });
+      if ((r.status === 429 || r.status === 503) && attempt < 3) {
+        const ra = parseInt(r.headers.get('retry-after') || '', 10);
+        const ms = Math.min(60000, (Number.isFinite(ra) ? ra * 1000 : 0) || [5000, 15000, 40000][attempt]);
+        try { await r.arrayBuffer(); } catch (_) { /* drain */ }
+        await sleep(ms);
+        continue;
+      }
+      return r;
+    }
+  };
+  const p = wmQueue.then(run, run);
+  wmQueue = p.catch(() => {});
+  return p;
+}
+const isWikimedia = (url) => /(^|\.)(wikimedia|wikipedia)\.org$/.test(new URL(url).hostname);
 const clip = (s, n) => (s.length > n ? s.slice(0, n) + `\n… [${s.length - n} more characters]` : s);
 
 function stripHtml(html) {
@@ -18,7 +45,9 @@ function stripHtml(html) {
 }
 
 async function getJson(url, headers = {}) {
-  const r = await fetch(url, { headers: { ...UA, ...headers }, signal: AbortSignal.timeout(40000) });
+  const opts = { headers: { ...UA, ...headers }, signal: AbortSignal.timeout(90000) };
+  const r = isWikimedia(url) ? await wmFetch(url, opts) : await fetch(url, opts);
+  if (r.status === 429) throw new Error(`Wikimedia is rate-limiting right now (HTTP 429), even after waiting. Wait 2-3 minutes, then try again; don't run many searches at once.`);
   if (!r.ok) throw new Error(`HTTP ${r.status} from ${new URL(url).host}`);
   return r.json();
 }
@@ -45,7 +74,8 @@ async function webFetch(url) {
     const txt = Object.values((d.query && d.query.pages) || {}).map((p) => p.extract || '').join('\n\n');
     if (txt.trim()) return clip(txt, 20000);
   }
-  const r = await fetch(url, { headers: UA, redirect: 'follow', signal: AbortSignal.timeout(40000) });
+  const opts = { headers: UA, redirect: 'follow', signal: AbortSignal.timeout(60000) };
+  const r = isWikimedia(url) ? await wmFetch(url, opts) : await fetch(url, opts);
   const ct = r.headers.get('content-type') || '';
   if (ct.includes('html')) return clip(stripHtml(await r.text()), 20000);
   if (ct.startsWith('text/') || ct.includes('json')) return clip(await r.text(), 20000);
@@ -58,7 +88,7 @@ const FREE = /^(public domain|pd|cc0|cc by|cc-by|cc by-sa|cc-by-sa|no restrictio
 async function commonsSearch(query, limit = 12) {
   const url = 'https://commons.wikimedia.org/w/api.php?action=query&format=json&generator=search&gsrnamespace=6' +
     `&gsrlimit=${Math.min(30, limit)}&gsrsearch=${encodeURIComponent(query + ' filetype:bitmap')}` +
-    '&prop=imageinfo&iiprop=url|size|mime|extmetadata&iiurlwidth=1600';
+    '&prop=imageinfo&iiprop=url|size|mime|extmetadata';
   const d = await getJson(url);
   const pages = Object.values((d.query && d.query.pages) || {}).sort((a, b) => (a.index || 0) - (b.index || 0));
   const out = [];
@@ -79,15 +109,17 @@ async function commonsSearch(query, limit = 12) {
 async function commonsDownload(projectDir, fileTitle, saveAs) {
   const title = fileTitle.startsWith('File:') ? fileTitle : `File:${fileTitle}`;
   const d = await getJson('https://commons.wikimedia.org/w/api.php?action=query&format=json&prop=imageinfo' +
-    `&iiprop=url|size|mime|extmetadata&iiurlwidth=2400&titles=${encodeURIComponent(title)}`);
+    `&iiprop=url|size|mime|extmetadata&iiurlwidth=1920&titles=${encodeURIComponent(title)}`);
   const page = Object.values((d.query && d.query.pages) || {})[0];
   const ii = page && (page.imageinfo || [])[0];
   if (!ii) throw new Error(`Not found on Wikimedia Commons: ${title}`);
   const md = ii.extmetadata || {};
   const license = stripHtml(md.LicenseShortName?.value || '');
   if (!FREE.test(license)) throw new Error(`"${title}" is licensed "${license || 'unknown'}", not a free licence. Pick another image.`);
-  const src = ii.thumburl || ii.url;
-  const r = await fetch(src, { headers: UA, signal: AbortSignal.timeout(120000) });
+  // 1920 px is one of Commons' standard thumbnail sizes (cached, lightly limited); small originals are used as they are
+  const src = ii.width && ii.width <= 1920 && /image\/(jpeg|png|webp)/.test(ii.mime || '') ? ii.url : (ii.thumburl || ii.url);
+  const r = await wmFetch(src, { signal: AbortSignal.timeout(180000) }, 1500);
+  if (r.status === 429) throw new Error('Wikimedia is rate-limiting downloads right now (HTTP 429), even after waiting. Wait 2-3 minutes and try again, one image at a time.');
   if (!r.ok) throw new Error(`Download failed: HTTP ${r.status}`);
   const buf = Buffer.from(await r.arrayBuffer());
   let ext = (path.extname(new URL(src).pathname) || '.jpg').toLowerCase();
