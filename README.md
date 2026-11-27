@@ -59,15 +59,17 @@ Your hosting needs **"Setup Node.js App"** in cPanel (Node 18 or newer) and **Te
 3. **Install packages.** On the same page, click **Run NPM Install**. This installs the graphics engine and
    ffmpeg into the app folder.
 
-4. **Set your password.** Still on that page, add two **Environment variables**, then click **Save**:
+4. **Set your password.** Still on that page, add these **Environment variables**, then click **Save**:
    - `APP_PASSWORD`: the password you'll log in with.
    - `SECRET_KEY`: any long random text (e.g. mash the keyboard for 40+ characters).
+   - `MONGODB_URI` and `MONGODB_DB`: your MongoDB database (see [Database](#database-mongodb)).
 
 5. Click **Restart**, then open `https://studio.yourchannel.in` and log in.
 
 6. In **Settings**:
    1. **Server check**: renders a test clip and shows how fast this server makes films.
-   2. **AI models**: add a key (e.g. Anthropic), set the default provider and model, then click **Test**.
+   2. **AI models**: add a key (e.g. Gemini or Anthropic), choose its model, click **Test**, then tick it in the
+      **Provider priority** list and save.
    3. **Narration voice**: AI Awaaz, OpenAI TTS or ElevenLabs, then click **Test voice**.
    4. **Telegram** and **YouTube** whenever you like (below).
 
@@ -131,6 +133,27 @@ cPanel. Without https (on your PC) it uses polling.
 | AI | `/models` · `/model` · `/model openrouter some/model` · `/model default anthropic claude-sonnet-5-5` |
 
 Telegram lets bots send files up to 50 MB and receive files up to 20 MB. Bigger files go through the web app.
+
+## Database (MongoDB)
+
+By default the app keeps its data in files in `data/`. For hosting, MongoDB (e.g. a free MongoDB Atlas cluster)
+is safer: your films' history, settings and ideas survive re-installs and server moves.
+
+1. In MongoDB Atlas, go to **Database → Connect → Drivers** and copy the connection string.
+2. Set two settings: in `.env` on your PC, or as cPanel **Environment variables** on the server.
+   ```
+   MONGODB_URI=mongodb+srv://USER:PASSWORD@cluster0.xxxxx.mongodb.net/
+   MONGODB_DB=documentary_studio
+   ```
+   Give **each copy its own `MONGODB_DB`** (e.g. `documentary_studio` live, `documentary_staging`,
+   `documentary_local` on your PC). Otherwise they share and overwrite each other's data.
+3. In Atlas → **Network Access**, allow your server's IP address (cPanel shows it under *Server Information*).
+   For your PC, allow your current IP.
+4. Restart the app. **Settings → Server check** shows `Database: MongoDB connected`.
+
+On the first connection to an empty database, the app copies your existing local data into MongoDB
+automatically. If MongoDB can't be reached, the app still starts on local files and the server check shows why.
+Film media (images, voice, videos) always stay on the server's disk in `data/projects/`.
 
 ## AI Awaaz voices
 
