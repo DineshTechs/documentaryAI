@@ -238,7 +238,10 @@ async function chatAnthropic(cfg, model, system, messages, tools, maxTokens, ret
 }
 
 // ---------------------------------------------------------------- OpenAI-compatible
-function toOpenAI(system, messages) {
+// Gemini thinking models sign their tool calls (extra_content.google.thought_signature) and want the signature
+// back. Calls made by another provider have none: Google documents this placeholder for that case.
+const SKIP_SIG = 'skip_thought_signature_validator';
+function toOpenAI(system, messages, provider = null) {
   const out = system ? [{ role: 'system', content: system }] : [];
   const imgs = [];
   const flush = () => {
@@ -253,7 +256,15 @@ function toOpenAI(system, messages) {
     else if (m.role === 'assistant') {
       const msg = { role: 'assistant', content: m.text || '' };
       if (m.tool_calls && m.tool_calls.length) {
-        msg.tool_calls = m.tool_calls.map((tc) => ({ id: safeId(tc.id), type: 'function', function: { name: tc.name, arguments: JSON.stringify(tc.args || {}) } }));
+        msg.tool_calls = m.tool_calls.map((tc, i) => {
+          const call = { id: safeId(tc.id), type: 'function', function: { name: tc.name, arguments: JSON.stringify(tc.args || {}) } };
+          if (provider === 'gemini') {
+            const sig = tc.extra && tc.extra.google && tc.extra.google.thought_signature;
+            if (sig) call.extra_content = { google: { thought_signature: sig } };
+            else if (i === 0) call.extra_content = { google: { thought_signature: SKIP_SIG } };
+          }
+          return call;
+        });
       }
       out.push(msg);
     } else if (m.role === 'tool') {
@@ -266,7 +277,7 @@ function toOpenAI(system, messages) {
 }
 
 async function chatOpenAI(cfg, model, system, messages, tools, maxTokens, provider, retries = 4) {
-  const body = { model, messages: toOpenAI(system, messages) };
+  const body = { model, messages: toOpenAI(system, messages, provider) };
   if (tools && tools.length) body.tools = tools.map((t) => ({ type: 'function', function: t }));
   if (maxTokens && provider !== 'openai') body.max_tokens = maxTokens;
   const headers = { 'content-type': 'application/json' };
@@ -278,7 +289,9 @@ async function chatOpenAI(cfg, model, system, messages, tools, maxTokens, provid
   const calls = (choice.tool_calls || []).map((tc, i) => {
     let args = {};
     try { args = JSON.parse(tc.function?.arguments || '{}'); } catch (_) { args = { _raw: tc.function?.arguments }; }
-    return { id: tc.id || `call_${Date.now()}_${i}`, name: tc.function?.name, args };
+    const out = { id: tc.id || `call_${Date.now()}_${i}`, name: tc.function?.name, args };
+    if (tc.extra_content) out.extra = tc.extra_content; // e.g. Gemini's thought signature, sent back next turn
+    return out;
   });
   let content = choice.content;
   if (Array.isArray(content)) content = content.map((p) => p.text || '').join('');
