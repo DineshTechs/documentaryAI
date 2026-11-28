@@ -95,7 +95,7 @@ async function checkOne(svc, timeoutMs = 12000) {
 async function checkAll(only = null) {
   let ip = null;
   try { const r = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(8000), headers: { 'user-agent': UA } }); ip = (await r.json()).ip; } catch (_) { /* optional */ }
-  const list = only ? SERVICES.filter((s) => only.includes(s.host)) : SERVICES;
+  const list = only ? (SERVICES.filter((s) => only.includes(s.host)).length ? SERVICES.filter((s) => only.includes(s.host)) : only.map((h) => ({ name: h, host: h, path: '/' }))) : SERVICES;
   const results = await Promise.all(list.map((s) => checkOne(s).catch((e) => ({ name: s.name, host: s.host, ok: false, why: e.message }))));
   return { server_ip: ip, node: process.version, results };
 }

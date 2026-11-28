@@ -142,8 +142,8 @@ r.get('/api/llm/models/:provider', async (req, res, { provider }) => {
   try { json(res, { models: await llm.listModels(provider, /fresh=1/.test(req.url)) }); } catch (e) { throw new HttpError(400, e.message); }
 });
 r.get('/api/net/check', async (req, res) => {
-  const only = req.query && req.query.host ? [String(req.query.host)] : null;
-  res.json(await require('./netcheck').checkAll(only));
+  const host = new URL(req.url, 'http://x').searchParams.get('host');
+  json(res, await require('./netcheck').checkAll(host ? [host] : null));
 });
 r.get('/api/eta', (req, res) => {
   const d = Math.min(3600, Math.max(10, parseInt(new URL(req.url, 'http://x').searchParams.get('duration') || '90', 10)));
