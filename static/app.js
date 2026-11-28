@@ -920,10 +920,14 @@ async function viewSettings(section = "overview") {
     </section>
 
     <section class="spane" data-pane="channel">
-      <h2>Channel</h2><p class="hint">The agent and the YouTube metadata writer follow these.</p>
+      <h2>Channel</h2><p class="hint">Paste your channel link and press <b>Read my channel</b>. The app reads your channel's name, About text and recent videos, and fills in everything below; the agent and the YouTube metadata writer follow it.</p>
+      <div class="row" style="align-items:end">${field("c-url", "Channel link", ch.url || "", { ph: "https://www.youtube.com/@yourchannel" })}<div style="flex:0 0 auto"><button class="primary" id="c-read">Read my channel</button></div></div>
+      <div class="hint" id="c-status">${ch.analyzed_at ? `Filled in from your channel on ${esc(new Date(ch.analyzed_at).toLocaleString())}.${(ch.recent_titles || []).length ? ` Read ${ch.recent_titles.length} recent videos.` : ""}` : ""}</div>
+      <details class="chdetails" ${ch.url ? "" : "open"}><summary>Details (filled in automatically; you can still edit them)</summary>
       <div class="row">${field("c-name", "Channel name", ch.name)}${combo("c-lang", "Language of your videos", ch.language || "English", { ph: "e.g. Bhojpuri" })}</div>
       <label for="c-style">Style, audience and tone</label><textarea id="c-style" placeholder="e.g. Calm, authoritative narration. History mysteries for adults 25-45. No sensationalism; always cite sources.">${esc(ch.style || "")}</textarea>
       <label for="c-footer">Description footer (added to every video description)</label><textarea id="c-footer" placeholder="Subscribe for more… · Music: … · Business: …">${esc(ch.footer || "")}</textarea>
+      </details>
     </section>
 
     <section class="spane" data-pane="ai">
@@ -1131,7 +1135,7 @@ async function viewSettings(section = "overview") {
     const llm_prices = {};
     $$("[data-price]").forEach((i) => { (llm_prices[i.dataset.price] = llm_prices[i.dataset.price] || {})[i.dataset.f] = i.value.trim().replace(/^\$/, ""); });
     return { providers, llm_prices, llm_priority: $$("[data-prio]").filter((c) => c.checked).map((c) => c.dataset.prio), llm_order: $$("[data-prio]").map((c) => c.dataset.prio),
-      channel: { name: $("#c-name").value, language: $("#c-lang").value, style: $("#c-style").value, footer: $("#c-footer").value },
+      channel: { ...(s.channel || {}), url: $("#c-url").value.trim(), name: $("#c-name").value, language: $("#c-lang").value, style: $("#c-style").value, footer: $("#c-footer").value },
       tts: { provider: ($('input[name="t-prov"]:checked') || {}).value || "none", openai_key: $("#t-okey").value, openai_voice: $("#t-ovoice").value, openai_model: $("#t-omodel").value, openai_instructions: $("#t-oinst").value,
         elevenlabs_key: $("#t-ekey").value, elevenlabs_voice: $("#t-evoice").value, elevenlabs_model: $("#t-emodel").value,
         aiawaaz_relay_url: $("#t-arelay").value.trim(), aiawaaz_relay_key: $("#t-arkey").value.trim(),
@@ -1178,6 +1182,18 @@ async function viewSettings(section = "overview") {
     try { await navigator.clipboard.writeText(t); toast("Relay script copied. Paste it into the Cloudflare Worker editor."); }
     catch (_) { const o = $("#t-aout"); o.style.display = ""; o.textContent = t; toast("Copy the script from the box below."); }
   }));
+  $("#c-read").onclick = (e) => act(e.target, async () => {
+    const url = $("#c-url").value.trim();
+    if (!url) return toast("Paste your channel link first, e.g. https://www.youtube.com/@yourchannel");
+    $("#c-status").textContent = "Reading your channel and writing the profile…";
+    const ch2 = await api("/api/channel/analyze", { method: "POST", body: { url } });
+    s.channel = ch2;
+    $("#c-name").value = ch2.name || ""; $("#c-style").value = ch2.style || ""; $("#c-footer").value = ch2.footer || "";
+    const lang = $("#c-lang"); lang.value = ch2.language || "English"; lang.dispatchEvent(new Event("input", { bubbles: true }));
+    const sel = $("#c-lang-sel"); if (sel) { if (![...sel.options].some((o) => o.value === lang.value)) sel.add(new Option(lang.value, lang.value)); sel.value = lang.value; }
+    $("#c-status").textContent = `Filled in from "${ch2.name}"${(ch2.recent_titles || []).length ? ` (read ${ch2.recent_titles.length} recent videos)` : ""}. Saved. Open Details to check or edit.`;
+    toast("Channel profile filled in and saved");
+  });
   $("#netchk").onclick = (e) => act(e.target, async () => {
     const o = $("#netchk-out"); o.style.display = ""; o.innerHTML = `<p class="hint">Testing… (up to 30 s)</p>`;
     const r = await api("/api/net/check");

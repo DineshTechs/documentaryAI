@@ -111,6 +111,14 @@ function settingsJson(req) {
   return out;
 }
 r.get('/api/settings', async (req, res) => { await store.reloadSettings(); json(res, settingsJson(req)); });
+// Channel profile from just the channel link: fills name, language, style/audience and footer
+r.post('/api/channel/analyze', async (req, res) => {
+  const { url = '' } = await jsonBody(req);
+  const prof = await youtube.analyzeChannel(url);
+  const old = store.getSetting('channel', {}) || {};
+  store.setSetting('channel', { ...old, ...prof });
+  json(res, store.getSetting('channel', {}));
+});
 r.put('/api/settings', async (req, res) => {
   const body = await jsonBody(req);
   await store.reloadSettings();
@@ -306,31 +314,9 @@ r.post('/api/projects/:id/thumbnails/design', async (req, res, { id }) => {
   try { json(res, await youtube.designThumbnails(p, root(p))); } catch (e) { throw new HttpError(400, e.message); }
 });
 // SEO checklist + score, and a one-click fix that fills in what's missing
-async function seoReport(p) {
-  const m = store.getMeta(p.id);
-  let duration = 0;
-  try { if (p.final_video) duration = await require('./renderer/ffmpeg').duration(path.join(root(p), p.final_video)); } catch (_) { /* */ }
-  const lang = seo.uploadLang(p, m, (store.getSetting('channel', {}) || {}).language);
-  return { ...seo.audit(p, m, root(p), { duration }), language: lang, preview: seo.prepare(p, m, root(p), { duration, lang }) };
-}
+const seoReport = (p) => youtube.seoReport(p, root(p));
 r.get('/api/projects/:id/seo', async (req, res, { id }) => json(res, await seoReport(projectOr404(id))));
-r.post('/api/projects/:id/seo/fix', async (req, res, { id }) => {
-  const p = projectOr404(id);
-  const m = store.getMeta(p.id);
-  if (!m.title || !m.description || (m.tags || []).length < 8 || !Object.keys(m.localized || {}).length || !m.focus_keyword) {
-    // fill in what's missing, but keep what you already chose or wrote
-    const keep = {};
-    if (m.title) keep.title = m.title;
-    if (p.aspect === '9:16' ? String(m.description || '').length >= 40 : (String(m.description || '').match(/[\p{L}\p{N}]+/gu) || []).length >= 120) keep.description = m.description;
-    if ((m.tags || []).length >= 8) keep.tags = m.tags;
-    await youtube.generateMetadata(p, root(p));
-    if (Object.keys(keep).length) youtube.saveMeta(p.id, keep);
-  }
-  const r2 = await seoReport(p);
-  // save the cleaned-up version so what you see is exactly what gets uploaded
-  youtube.saveMeta(p.id, { title: r2.preview.title, description: r2.preview.description, tags: r2.preview.tags, language: r2.language });
-  json(res, await seoReport(p));
-});
+r.post('/api/projects/:id/seo/fix', async (req, res, { id }) => { const p = projectOr404(id); json(res, await youtube.fixSeo(p, root(p))); });
 r.post('/api/projects/:id/youtube-upload', async (req, res, { id }) => {
   const p = projectOr404(id);
   await youtube.accessToken();

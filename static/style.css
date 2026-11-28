@@ -318,3 +318,4 @@ label.follow input { margin: 0; }
 #live-top .live{margin-bottom:8px}
 .ev.stage{font-weight:600;text-transform:capitalize;border-top:1px solid var(--line,#2a2f3a);padding-top:8px;margin-top:6px}
 .feed.nf .ev.stage{border-top:0;padding-top:0;margin-top:0;border-bottom:1px solid var(--line,#2a2f3a);padding-bottom:8px;margin-bottom:6px}
+.chdetails{margin-top:12px}.chdetails summary{cursor:pointer;color:var(--muted,#9aa3b2);margin-bottom:8px}

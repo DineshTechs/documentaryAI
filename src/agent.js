@@ -171,7 +171,7 @@ You work only through your tools. Follow the guide below closely.
 - Workspace files: film.json, script.md, beats.md, sources.md, credits.md, images/, audio/, uploads/ (the user's own files), out/
 ${progressReport(p)}
 ## Channel
-- Name: ${channel.name || '(not set)'}; style and audience: ${channel.style || '(not set)'}
+- Name: ${channel.name || '(not set)'}; style and audience: ${channel.style || '(not set)'}${(channel.recent_titles || []).length ? `\n- Recent videos on the channel (match their style; don't repeat them): ${channel.recent_titles.slice(0, 12).join(' | ')}` : ''}
 
 ## Language of this film: ${filmLanguage(p)}
 The film language is ONLY for what the audience hears and reads: narration lines, script.md, captions and on-screen

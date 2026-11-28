@@ -11,7 +11,7 @@
 
 const MCP_URL = 'https://app.aiawaaz.io/api/mcp';
 // Other services it may forward to (AI providers, ElevenLabs, Wikimedia), only with the relay key
-const ALLOWED = /^(api\.anthropic\.com|api\.openai\.com|generativelanguage\.googleapis\.com|openrouter\.ai|api\.deepseek\.com|api\.groq\.com|api\.mistral\.ai|api\.x\.ai|gen\.pollinations\.ai|text\.pollinations\.ai|api\.elevenlabs\.io|commons\.wikimedia\.org|upload\.wikimedia\.org)$/;
+const ALLOWED = /^(api\.anthropic\.com|api\.openai\.com|generativelanguage\.googleapis\.com|openrouter\.ai|api\.deepseek\.com|api\.groq\.com|api\.mistral\.ai|api\.x\.ai|gen\.pollinations\.ai|text\.pollinations\.ai|api\.elevenlabs\.io|commons\.wikimedia\.org|upload\.wikimedia\.org|www\.youtube\.com)$/;
 // Audio files may be served from AI Awaaz or its storage; only https downloads are relayed, and only with the key.
 
 export default {

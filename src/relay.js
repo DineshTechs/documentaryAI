@@ -5,7 +5,7 @@
 const store = require('./store');
 
 // Services the relay worker will forward to (it checks the same list)
-const ALLOWED = /^(api\.anthropic\.com|api\.openai\.com|generativelanguage\.googleapis\.com|openrouter\.ai|api\.deepseek\.com|api\.groq\.com|api\.mistral\.ai|api\.x\.ai|gen\.pollinations\.ai|text\.pollinations\.ai|api\.elevenlabs\.io|commons\.wikimedia\.org|upload\.wikimedia\.org)$/;
+const ALLOWED = /^(api\.anthropic\.com|api\.openai\.com|generativelanguage\.googleapis\.com|openrouter\.ai|api\.deepseek\.com|api\.groq\.com|api\.mistral\.ai|api\.x\.ai|gen\.pollinations\.ai|text\.pollinations\.ai|api\.elevenlabs\.io|commons\.wikimedia\.org|upload\.wikimedia\.org|www\.youtube\.com)$/;
 const blocked = new Map(); // host -> until
 
 function info() {

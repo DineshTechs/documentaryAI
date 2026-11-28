@@ -122,6 +122,130 @@ const langCode = (p) => seo.langCode(p, (store.getSetting('channel', {}) || {}).
 const otherLang = (p) => (langCode(p) === 'en' ? 'hi' : 'en');
 const otherLangName = (p) => (otherLang(p) === 'en' ? 'English' : 'Hindi (Devanagari)');
 
+// ---------------------------------------------------------------- SEO fix (the "Fix SEO" button, and before every upload)
+// Fills in what is missing (title, description, tags, focus keyword, second-language title) but keeps what you chose,
+// then saves the cleaned-up version, so what you see is exactly what gets uploaded. Returns the audit.
+async function fixSeo(p, root) {
+  const m = store.getMeta(p.id);
+  if (!m.title || !m.description || (m.tags || []).length < 8 || !Object.keys(m.localized || {}).length || !m.focus_keyword) {
+    const keep = {};
+    if (m.title) keep.title = m.title;
+    if (p.aspect === '9:16' ? String(m.description || '').length >= 40 : (String(m.description || '').match(/[\p{L}\p{N}]+/gu) || []).length >= 120) keep.description = m.description;
+    if ((m.tags || []).length >= 8) keep.tags = m.tags;
+    await generateMetadata(p, root);
+    if (Object.keys(keep).length) saveMeta(p.id, keep);
+  }
+  const r = await seoReport(p, root);
+  saveMeta(p.id, { title: r.preview.title, description: r.preview.description, tags: r.preview.tags, language: r.language });
+  return seoReport(p, root);
+}
+async function seoReport(p, root) {
+  const m = store.getMeta(p.id);
+  let duration = 0;
+  try { if (p.final_video) duration = await ff.duration(path.join(root, p.final_video)); } catch (_) { /* */ }
+  const lang = seo.uploadLang(p, m, (store.getSetting('channel', {}) || {}).language);
+  return { ...seo.audit(p, m, root, { duration }), language: lang, preview: seo.prepare(p, m, root, { duration, lang }) };
+}
+
+// ---------------------------------------------------------------- captions
+const parseSrt = (txt) => String(txt).replace(/\r/g, '').split(/\n\s*\n/).map((b) => {
+  const l = b.trim().split('\n'); const i = l.findIndex((x) => x.includes('-->'));
+  return i < 0 ? null : { time: l[i], text: l.slice(i + 1).join('\n').trim() };
+}).filter((c) => c && c.text);
+const writeSrt = (cues) => cues.map((c, i) => `${i + 1}\n${c.time}\n${c.text}\n`).join('\n');
+
+// The film's caption file (made by the final render), and a translated copy for the second language
+async function captionFiles(p, root) {
+  const rel = [p.final_srt, 'out/final.srt'].find((f) => f && fs.existsSync(path.join(root, f)));
+  if (!rel) return [];
+  const main = path.join(root, rel);
+  const out = [{ file: main, lang: langCode(p), name: '' }];
+  const other = otherLang(p);
+  const tfile = main.replace(/\.srt$/i, `.${other}.srt`);
+  try {
+    if (!fs.existsSync(tfile) || fs.statSync(tfile).mtimeMs < fs.statSync(main).mtimeMs) {
+      const cues = parseSrt(fs.readFileSync(main, 'utf8'));
+      const done = [];
+      for (let i = 0; i < cues.length; i += 120) {
+        const part = cues.slice(i, i + 120);
+        const j = await llm.completeJson(`Translate these video captions into ${otherLangName(p)} for viewers of a documentary.
+Keep the meaning and names, keep each line short like a subtitle, and return exactly ${part.length} lines in the same order.
+Reply as JSON: {"lines": ["...", ...]}
+${JSON.stringify(part.map((c) => c.text))}`, 'You translate subtitles. Reply with JSON only.', null, null, p.id);
+        const lines = (j && j.lines) || [];
+        if (lines.length !== part.length) throw new Error('translation returned a different number of lines');
+        part.forEach((c, k) => done.push({ time: c.time, text: String(lines[k] || c.text).trim() }));
+      }
+      fs.writeFileSync(tfile, writeSrt(done));
+    }
+    out.push({ file: tfile, lang: other, name: other === 'en' ? 'English' : 'हिन्दी' });
+  } catch (e) { out.translateError = e.message; }
+  return out;
+}
+
+// ---------------------------------------------------------------- channel profile from just its link
+// Reads the channel (YouTube API when connected, otherwise its public page) and lets the AI write the name,
+// language, style/audience and description footer that the agent and the metadata writer follow.
+function parseChannelUrl(url) {
+  const u = String(url || '').trim();
+  let m;
+  if ((m = u.match(/youtube\.com\/channel\/(UC[\w-]{20,})/i))) return { id: m[1] };
+  if ((m = u.match(/youtube\.com\/(@[\w.\-\p{L}\p{N}]+)/iu))) return { handle: decodeURIComponent(m[1]) };
+  if ((m = u.match(/^(@[\w.\-\p{L}\p{N}]+)$/u))) return { handle: m[1] };
+  if ((m = u.match(/youtube\.com\/(?:c|user)\/([^/?#]+)/i))) return { legacy: decodeURIComponent(m[1]) };
+  return null;
+}
+
+async function readChannel(url) {
+  const ref = parseChannelUrl(url);
+  if (!ref) throw new Error('That does not look like a YouTube channel link. Use e.g. https://www.youtube.com/@yourchannel');
+  // 1. YouTube Data API (when your channel is connected)
+  let token = null; try { token = await accessToken(); } catch (_) { /* not connected */ }
+  if (token) {
+    const q = ref.id ? `id=${ref.id}` : ref.handle ? `forHandle=${encodeURIComponent(ref.handle)}` : `forUsername=${encodeURIComponent(ref.legacy)}`;
+    const api = async (u) => { const r = await fetch(u, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(20000) }); if (!r.ok) throw new Error(`YouTube API ${r.status}`); return r.json(); };
+    try {
+      const j = await api(`https://www.googleapis.com/youtube/v3/channels?part=snippet,brandingSettings,contentDetails,statistics&${q}`);
+      const c = (j.items || [])[0];
+      if (c) {
+        let titles = [];
+        const up = c.contentDetails && c.contentDetails.relatedPlaylists && c.contentDetails.relatedPlaylists.uploads;
+        if (up) { try { titles = ((await api(`https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&maxResults=20&playlistId=${up}`)).items || []).map((x) => x.snippet.title); } catch (_) { /* */ } }
+        const b = (c.brandingSettings && c.brandingSettings.channel) || {};
+        return { id: c.id, name: c.snippet.title, handle: c.snippet.customUrl || ref.handle || '', description: c.snippet.description || '', keywords: b.keywords || '',
+          country: c.snippet.country || b.country || '', language: c.snippet.defaultLanguage || b.defaultLanguage || '', subscribers: (c.statistics || {}).subscriberCount, titles };
+      }
+    } catch (_) { /* fall back to the public page */ }
+  }
+  // 2. The public channel page
+  const page = ref.id ? `https://www.youtube.com/channel/${ref.id}/videos` : ref.handle ? `https://www.youtube.com/${ref.handle}/videos` : `https://www.youtube.com/c/${ref.legacy}/videos`;
+  const r = await require('./relay').fetchSmart(page, { headers: { 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36', 'accept-language': 'en-US,en;q=0.8' }, signal: AbortSignal.timeout(20000) });
+  if (!r.ok) throw new Error(`Could not open the channel page (HTTP ${r.status}).`);
+  const html = await r.text();
+  const meta = (n) => { const m = html.match(new RegExp(`<meta (?:property|name)="${n}" content="([^"]*)"`)); return m ? m[1].replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'") : ''; };
+  const titles = [...html.matchAll(/"videoRenderer".{0,1500}?"title":\{"runs":\[\{"text":"((?:[^"\\]|\\.)*)"/g)].map((m) => { try { return JSON.parse(`"${m[1]}"`); } catch (_) { return m[1]; } }).slice(0, 20);
+  const name = meta('og:title') || (html.match(/<title>([^<]*)<\/title>/) || [])[1] || '';
+  if (!name) throw new Error('Could not read the channel page. Connect your YouTube channel in Settings and try again.');
+  return { name: name.replace(/ - YouTube$/, ''), handle: ref.handle || '', description: meta('og:description') || meta('description'), keywords: meta('keywords'), country: '', language: '', titles };
+}
+
+async function analyzeChannel(url) {
+  const c = await readChannel(url);
+  const j = await llm.completeJson(`You set up the profile a documentary-making assistant follows for this YouTube channel.
+Channel: ${c.name}${c.handle ? ` (${c.handle})` : ''}${c.country ? `, country ${c.country}` : ''}${c.language ? `, default language ${c.language}` : ''}${c.subscribers ? `, ${c.subscribers} subscribers` : ''}
+About: ${String(c.description || '').slice(0, 1500)}
+Keywords: ${String(c.keywords || '').slice(0, 300)}
+Recent video titles:\n${(c.titles || []).map((t) => `- ${t}`).join('\n') || '(none found)'}
+
+Reply as JSON:
+{"language": "the language the videos are made in, as a plain English name, e.g. Hindi, English, Hinglish, Bhojpuri",
+ "style": "2-4 sentences: the channel's niche and topics, target audience, narration tone and pacing, what its viewers expect; written as instructions for the scriptwriter",
+ "footer": "a short description footer for every video: one subscribe line in the channel's language plus the channel link${c.handle ? ` https://www.youtube.com/${c.handle}` : ''}, and any social or business links that appear in the About text (no invented links)"}`,
+  'You analyse YouTube channels. Reply with JSON only.');
+  return { url: String(url).trim(), name: c.name, handle: c.handle, language: j.language || c.language || 'English', style: j.style || '', footer: j.footer || '',
+    recent_titles: (c.titles || []).slice(0, 20), analyzed_at: new Date().toISOString() };
+}
+
 // ---------------------------------------------------------------- designed thumbnails
 // Renders thumbnail variants (out/thumb_N.png). With no specs given, the AI designs 3 from the film's photos.
 async function designThumbnails(p, root, specs = null) {
@@ -234,12 +358,15 @@ async function upload(p, root) {
     let m = store.getMeta(pid);
     const video = p.final_video ? path.join(root, p.final_video) : null;
     if (!video || !fs.existsSync(video)) throw new Error('Final video file not found. Finish the film first.');
-    // SEO autopilot: never upload without a title, description and tags
-    if (!m.title || !m.description || !(m.tags || []).length) {
-      store.saveMeta(pid, { upload_status: 'writing title, description and tags' });
-      await generateMetadata(p, root);
-      m = store.getMeta(pid);
-    }
+    // SEO autopilot: fix the title, description, tags and second-language title before every upload
+    store.saveMeta(pid, { upload_status: 'optimizing title, description and tags (SEO)' });
+    let seoScore = null;
+    try { seoScore = (await fixSeo(p, root)).score; }
+    catch (e) { if (!m.title || !m.description) throw new Error(`Could not prepare the title and description: ${e.message}`); }
+    m = store.getMeta(pid);
+    // captions (and a translated copy) ready before the upload starts
+    store.saveMeta(pid, { upload_status: 'preparing captions' });
+    const caps = await captionFiles(p, root).catch((e) => Object.assign([], { translateError: e.message }));
     if (!m.title) throw new Error('Add a title (or generate metadata) first.');
     let duration = 0;
     try { duration = await ff.duration(video); } catch (_) { /* chapters are checked without it */ }
@@ -288,10 +415,13 @@ async function upload(p, root) {
     } finally { fs.closeSync(fd); }
     store.saveMeta(pid, { youtube_id: videoId, upload_status: 'processing captions/thumbnail', upload_progress: 100 });
     const notes = [];
-    if (p.final_srt && fs.existsSync(path.join(root, p.final_srt))) {
-      try { await uploadCaptions(videoId, path.join(root, p.final_srt), lang); notes.push('captions added'); }
-      catch (e) { notes.push(`captions failed: ${e.message}`); }
+    if (seoScore != null) notes.push(`SEO score ${seoScore}/100`);
+    for (const c of caps) {
+      try { await uploadCaptions(videoId, c.file, c.lang, c.name); notes.push(`captions (${c.lang}) added`); }
+      catch (e) { notes.push(`captions (${c.lang}) failed: ${/insufficient|scope|forbidden|403/i.test(e.message) ? 'reconnect YouTube in Settings to allow captions' : e.message}`); }
     }
+    if (!caps.length) notes.push('no captions file (render the final film to make one)');
+    if (caps.translateError) notes.push(`translated captions skipped: ${String(caps.translateError).slice(0, 120)}`);
     if (m.thumbnail_path && fs.existsSync(path.join(root, m.thumbnail_path))) {
       try { await uploadThumbnail(videoId, path.join(root, m.thumbnail_path)); notes.push('thumbnail set'); }
       catch (e) { notes.push(`thumbnail failed (custom thumbnails need a verified channel): ${e.message}`); }
@@ -307,9 +437,9 @@ async function upload(p, root) {
   }
 }
 
-async function uploadCaptions(videoId, srtFile, lang) {
+async function uploadCaptions(videoId, srtFile, lang, name = '') {
   const boundary = `docstudio${Date.now()}`;
-  const meta = JSON.stringify({ snippet: { videoId, language: lang, name: '', isDraft: false } });
+  const meta = JSON.stringify({ snippet: { videoId, language: lang, name, isDraft: false } });
   const body = Buffer.concat([
     Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${boundary}\r\nContent-Type: application/octet-stream\r\n\r\n`),
     fs.readFileSync(srtFile), Buffer.from(`\r\n--${boundary}--`)]);
@@ -325,4 +455,4 @@ async function uploadThumbnail(videoId, file) {
 }
 
 module.exports = { CATEGORIES, REDIRECT_PATH, publicUrl, redirectUri, creds, authUrl, exchangeCode, accessToken, disconnect,
-  saveMeta, generateMetadata, extractThumbnail, startUpload, designThumbnails, langCode };
+  saveMeta, generateMetadata, extractThumbnail, startUpload, designThumbnails, langCode, fixSeo, seoReport, captionFiles, parseSrt, analyzeChannel, parseChannelUrl };

@@ -15,6 +15,7 @@ const norm = (s) => String(s || '').toLowerCase().replace(/[^\p{L}\p{N} ]/gu, ' 
 function langCode(p, channelLang) {
   const l = String(p.language || channelLang || 'English').toLowerCase();
   const map = { hinglish: 'hi', hindi: 'hi', english: 'en', bengali: 'bn', marathi: 'mr', tamil: 'ta', telugu: 'te', kannada: 'kn', malayalam: 'ml', gujarati: 'gu', punjabi: 'pa', urdu: 'ur', spanish: 'es', french: 'fr', german: 'de', portuguese: 'pt', arabic: 'ar' };
+  if (/^[a-z]{2}(-[a-z]{2})?$/.test(l) && Object.values(map).includes(l.slice(0, 2))) return l.slice(0, 2); // already a code
   return Object.entries(map).find(([k]) => l.includes(k))?.[1] || 'en';
 }
 // The metadata used to default to "en" for every film; trust it only when it matches the film or was changed on purpose.
