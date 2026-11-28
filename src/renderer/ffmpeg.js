@@ -5,6 +5,37 @@ const fs = require('fs');
 
 let cached = null;
 
+// On shared hosting (CloudLinux) the account has a limit on processes/threads. When it is reached, starting
+// ffmpeg fails with EAGAIN. Keep thread counts low there, and retry for a bit when it happens.
+const LOW = () => { const t = String(process.env.RENDER_THREADS || require('../config').RENDER_THREADS || '0'); return t !== '0' ? t : ''; };
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const LIMIT_HINT = 'EAGAIN means the hosting account hit its limit on processes/threads (shared hosting). Close old copies of the app, set NODE_OPTIONS=--v8-pool-size=2 and UV_THREADPOOL_SIZE=2 in the app\'s environment variables, keep RENDER_THREADS=1, and restart. If it continues, ask your host to raise the process (NPROC) limit.';
+
+// spawn() that waits and retries while the process limit is reached
+function spawnSafe(cmd, args, opts) {
+  let p;
+  for (let i = 0; i < 5; i++) {
+    p = spawn(cmd, args, opts);
+    if (p.pid) return p;
+    p.on('error', () => {}); // the failed attempt reports its error asynchronously; ignore it
+    if (i < 4) sleepSync(1500 * (i + 1));
+  }
+  const e = new Error(`Could not start ffmpeg: the server's process limit is reached (EAGAIN). ${LIMIT_HINT}`);
+  const fake = new (require('events').EventEmitter)();
+  Object.assign(fake, { stdin: null, stdout: null, stderr: new (require('stream').PassThrough)(), kill() {} });
+  process.nextTick(() => fake.emit('error', e));
+  return fake;
+}
+
+// Fewer ffmpeg threads on small plans (each thread counts toward the hosting process limit)
+function limitThreads(args) {
+  const n = LOW();
+  if (!n || args.includes('-filter_threads')) return args;
+  const out = ['-filter_threads', n, '-filter_complex_threads', n, ...args];
+  if (!args.includes('-threads')) out.splice(out.length - 1, 0, '-threads', n);
+  return out;
+}
+
 function ffmpegPath() {
   if (cached) return cached;
   const candidates = [], tried = [];
@@ -16,10 +47,12 @@ function ffmpegPath() {
     try {
       if (c.includes('/') && !fs.existsSync(c)) { tried.push(`${c}: file missing`); continue; }
       if (c.includes('/')) { try { fs.chmodSync(c, 0o755); } catch (_) { /* may not own it */ } } // npm on some hosts drops the run permission
-      const r = spawnSync(c, ['-hide_banner', '-version'], { timeout: 30000 });
+      let r;
+      for (let i = 0; i < 5; i++) { r = spawnSync(c, ['-hide_banner', '-version'], { timeout: 30000 }); if (!(r.error && r.error.code === 'EAGAIN')) break; sleepSync(2000 * (i + 1)); }
       if (r.status === 0) { cached = c; return c; }
+      if (r.error && r.error.code === 'EAGAIN') { tried.push(`${c}: EAGAIN`); throw Object.assign(new Error(`ffmpeg is installed but the server refused to start it (EAGAIN).\n${LIMIT_HINT}`), { tried }); }
       tried.push(`${c}: ${r.error ? r.error.code || r.error.message : `exit ${r.status}${r.signal ? ` (${r.signal})` : ''} ${String(r.stderr || '').trim().slice(0, 150)}`}`);
-    } catch (e) { tried.push(`${c}: ${e.message}`); }
+    } catch (e) { if (e.tried) throw e; tried.push(`${c}: ${e.message}`); }
   }
   throw new Error('ffmpeg not found or not runnable on this server. What was tried:\n- ' + tried.join('\n- ')
     + '\nFix: in the server terminal run  node node_modules/ffmpeg-static/install.js  (downloads ffmpeg), or set FFMPEG_PATH to an ffmpeg binary, then restart the app.');
@@ -28,7 +61,7 @@ function ffmpegPath() {
 // Run ffmpeg, resolve with stderr text. Rejects with the tail of stderr on failure.
 function run(args, { timeoutMs = 0, onProgress } = {}) {
   return new Promise((resolve, reject) => {
-    const p = spawn(ffmpegPath(), ['-hide_banner', '-y', ...args], { stdio: ['ignore', 'ignore', 'pipe'] });
+    const p = spawnSafe(ffmpegPath(), ['-hide_banner', '-y', ...limitThreads(args)], { stdio: ['ignore', 'ignore', 'pipe'] });
     let err = '';
     let timer = null;
     if (timeoutMs) timer = setTimeout(() => p.kill('SIGKILL'), timeoutMs);
@@ -50,7 +83,7 @@ function run(args, { timeoutMs = 0, onProgress } = {}) {
 // Media duration in seconds (parses ffmpeg's "Duration:" line; no ffprobe needed).
 async function duration(file) {
   const out = await new Promise((resolve) => {
-    const p = spawn(ffmpegPath(), ['-hide_banner', '-i', file], { stdio: ['ignore', 'ignore', 'pipe'] });
+    const p = spawnSafe(ffmpegPath(), ['-hide_banner', '-i', file], { stdio: ['ignore', 'ignore', 'pipe'] });
     let err = '';
     p.stderr.on('data', (d) => { err += d.toString(); });
     p.on('close', () => resolve(err));
@@ -66,4 +99,4 @@ function versionLine() {
   return String(r.stdout || '').split('\n')[0];
 }
 
-module.exports = { ffmpegPath, run, duration, versionLine };
+module.exports = { ffmpegPath, run, duration, versionLine, spawnSafe, limitThreads };

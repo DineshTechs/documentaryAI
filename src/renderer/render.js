@@ -307,7 +307,7 @@ function encoder(file, W, H, fps, { preset, crf }) {
     '-an', '-c:v', 'libx264', '-preset', preset, '-crf', String(crf), '-maxrate', '16M', '-bufsize', '32M', '-pix_fmt', 'yuv420p', '-g', String(fps * 2)];
   if (config.RENDER_THREADS && config.RENDER_THREADS !== '0') args.push('-threads', config.RENDER_THREADS);
   args.push('-movflags', '+faststart', file);
-  const p = spawn(ff.ffmpegPath(), args, { stdio: ['pipe', 'ignore', 'pipe'] });
+  const p = ff.spawnSafe(ff.ffmpegPath(), args, { stdio: ['pipe', 'ignore', 'pipe'] });
   let err = '';
   let closed = null;
   p.stderr.on('data', (d) => { err = (err + d.toString()).slice(-4000); });

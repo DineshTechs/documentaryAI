@@ -6,7 +6,13 @@ const { fork } = require('child_process');
 function runJob(cmd, dir, opts = {}, onProgress) {
   let child;
   const promise = new Promise((resolve, reject) => {
-    child = fork(path.join(__dirname, 'worker.js'), [], { stdio: ['ignore', 'inherit', 'inherit', 'ipc'] });
+    // On small hosting plans keep the render process's thread count low (threads count toward the process limit)
+    const low = String(process.env.RENDER_THREADS || require('../config').RENDER_THREADS || '0') !== '0';
+    child = fork(path.join(__dirname, 'worker.js'), [], {
+      stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+      execArgv: low ? [...process.execArgv.filter((a) => !a.startsWith('--v8-pool-size')), '--v8-pool-size=2'] : process.execArgv,
+      env: low ? { ...process.env, UV_THREADPOOL_SIZE: process.env.UV_THREADPOOL_SIZE || '2' } : process.env,
+    });
     let finished = false;
     child.on('message', (m) => {
       if (m.type === 'progress') onProgress && onProgress(m.done, m.total, m.label);
