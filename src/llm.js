@@ -143,7 +143,7 @@ async function backupModel(provider, current) {
 }
 
 // ---------------------------------------------------------------- model lists (for the Settings dropdowns)
-const NOT_CHAT = /embed|whisper|tts|dall-?e|moderation|transcribe|realtime|audio|image|imagen|veo|davinci|babbage|search-|aqa|guard|rerank|ocr/i;
+const NOT_CHAT = /embed|whisper|tts|-live\b|live-|native-audio|robotics|dall-?e|moderation|transcribe|realtime|audio|image|imagen|veo|davinci|babbage|search-|aqa|guard|rerank|ocr/i;
 const modelCache = new Map();
 async function listModels(name, fresh = false) {
   const cfg = providerConfig(name);

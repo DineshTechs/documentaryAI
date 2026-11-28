@@ -68,6 +68,27 @@ function extraOptions() {
   try { return JSON.parse(raw); } catch (_) { throw new Error('AI Awaaz "extra options" must be JSON, e.g. {"speed": 1.0}'); }
 }
 
+// AI Awaaz allows a limited number of audios per minute (10 through Connect AI). Stay under it, and if it still
+// says "Please wait N seconds", wait and try again.
+const AWAAZ_PER_MIN = 9;
+const awaazTimes = [];
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function awaazPaced(fn) {
+  for (let attempt = 0; ; attempt++) {
+    const now = Date.now();
+    while (awaazTimes.length && now - awaazTimes[0] > 60000) awaazTimes.shift();
+    if (awaazTimes.length >= AWAAZ_PER_MIN) await sleep(60000 - (now - awaazTimes[0]) + 500);
+    awaazTimes.push(Date.now());
+    try { return await fn(); }
+    catch (e) {
+      const m = /audios? a minute|rate.?limit|too many|please wait\s+(\d+)\s*s/i.exec(e.message);
+      if (!m || attempt >= 6) throw e;
+      const wait = (/please wait\s+(\d+)/i.exec(e.message) || [])[1];
+      await sleep(Math.max(2, Number(wait || 0) + 1) * 1000 + attempt * 3000);
+    }
+  }
+}
+
 async function aiawaazSpeech(text, voice) {
   const s = settings();
   const c = awaazClient();
@@ -87,9 +108,9 @@ async function aiawaazSpeech(text, voice) {
   const v = String(voice || s.aiawaaz_voice || '').trim();
   if (v && !(a.voice in args)) args[a.voice] = await awaazVoiceArg(gen, a.voice, v);
   let res;
-  try { res = await c.call('generate_speech', args); }
+  try { res = await awaazPaced(() => c.call('generate_speech', args)); }
   catch (e) {
-    if (!/voice/i.test(e.message)) throw e;
+    if (!/voice/i.test(e.message) || /audios? a minute|please wait/i.test(e.message)) throw e;
     const prop = ((gen.inputSchema || {}).properties || {})[a.voice] || {};
     throw new Error(`${e.message}\nVoice sent as "${a.voice}": ${JSON.stringify(args[a.voice])}\nAI Awaaz expects: ${JSON.stringify(prop).slice(0, 600)}`);
   }
@@ -324,4 +345,5 @@ function uploadNote(provider) {
     '3. When they approve, find the MP3 in uploads/, run audio_silences on it, choose the pauses between lines (one fewer cut than lines), and split_audio into audio/<id>.mp3. Then run check_film and confirm the line lengths look right.';
 }
 
-module.exports = { TTS_PROVIDERS, UPLOAD_PROVIDERS, synthesize, settings, uploadNote, aiawaazInfo, listVoices, parseVoiceList, OPENAI_VOICES, argNames, audioUrl, AIAWAAZ_URL };
+module.exports = {
+  _awaazPaced: (...a) => awaazPaced(...a), TTS_PROVIDERS, UPLOAD_PROVIDERS, synthesize, settings, uploadNote, aiawaazInfo, listVoices, parseVoiceList, OPENAI_VOICES, argNames, audioUrl, AIAWAAZ_URL };

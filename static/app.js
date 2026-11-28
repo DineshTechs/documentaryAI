@@ -261,8 +261,8 @@ async function viewProject(pid) {
     <div class="stepper" id="stepper"></div><div class="eta hint" id="eta"></div>
     <div class="proj">
       <section class="card"><div id="approval"></div>
-        <h3 style="display:flex;justify-content:space-between;align-items:center">Agent <span style="display:flex;gap:10px;align-items:center"><span class="hint" id="p-model"></span><label class="follow" title="Keep scrolling to the newest entry as the agent works"><input type="checkbox" id="feed-follow"> Follow</label><button class="sm ghost" id="clear-log" title="Clear this film's activity log. The agent's memory and the files stay.">🧹 Clear log</button></span></h3>
-        <div class="feed-wrap"><div class="feed" id="feed"></div><button class="sm feed-new" id="feed-new" style="display:none"></button></div><div id="live"></div>
+        <h3 style="display:flex;justify-content:space-between;align-items:center">Agent <span style="display:flex;gap:10px;align-items:center"><span class="hint" id="p-model"></span><select id="feed-order" class="sm" title="Order of the activity log"><option value="new">Newest first</option><option value="old">Oldest first</option></select><label class="follow" title="Keep showing the newest entry as the agent works"><input type="checkbox" id="feed-follow"> Follow</label><button class="sm ghost" id="clear-log" title="Clear this film's activity log. The agent's memory and the files stay.">🧹 Clear log</button></span></h3>
+        <div id="live-top"></div><div class="feed-wrap"><div class="feed" id="feed"></div><button class="sm feed-new" id="feed-new" style="display:none"></button></div><div id="live"></div>
         <div class="composer"><textarea id="msg" placeholder="Message the agent… (Ctrl+Enter to send)"></textarea><button class="primary" id="send">Send</button></div>
       </section>
       <section class="card"><div class="tabs" id="tabs">
@@ -272,9 +272,14 @@ async function viewProject(pid) {
   $("#send").onclick = sendMsg;
   $("#msg").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) sendMsg(); });
   try { $("#feed-follow").checked = localStorage.getItem("feedFollow") === "1"; } catch (_) {}
-  $("#feed-follow").onchange = (e) => { try { localStorage.setItem("feedFollow", e.target.checked ? "1" : "0"); } catch (_) {} if (e.target.checked) { $("#feed").scrollTop = $("#feed").scrollHeight; PV.unseen = 0; $("#feed-new").style.display = "none"; } };
-  $("#feed-new").onclick = () => { $("#feed").scrollTop = $("#feed").scrollHeight; PV.unseen = 0; $("#feed-new").style.display = "none"; };
-  $("#feed").addEventListener("scroll", () => { const f = $("#feed"); if (f.scrollHeight - f.scrollTop - f.clientHeight < 40) { PV.unseen = 0; $("#feed-new").style.display = "none"; } });
+  $("#feed-order").value = newestFirst() ? "new" : "old";
+  $("#feed-order").onchange = (e) => {
+    try { localStorage.setItem("feedOrder", e.target.value); } catch (_) {}
+    PV.after = 0; PV.loaded = false; PV.unseen = 0; $("#feed").innerHTML = ""; $("#feed-new").style.display = "none"; poll();
+  };
+  $("#feed-follow").onchange = (e) => { try { localStorage.setItem("feedFollow", e.target.checked ? "1" : "0"); } catch (_) {} if (e.target.checked) { goNewest($("#feed")); PV.unseen = 0; $("#feed-new").style.display = "none"; } };
+  $("#feed-new").onclick = () => { goNewest($("#feed")); PV.unseen = 0; $("#feed-new").style.display = "none"; };
+  $("#feed").addEventListener("scroll", () => { if (atNewest($("#feed"))) { PV.unseen = 0; $("#feed-new").style.display = "none"; } });
   $("#clear-log").onclick = (e) => act(e.target, async () => {
     if (!confirm("Clear this film's activity log? The agent's memory and the film's files are kept.")) return;
     await api(`/api/projects/${p.id}/events`, { method: "DELETE" });
@@ -376,6 +381,11 @@ function eventBody(ev) {
   }
 }
 
+// Activity log order: newest entry on top (default) or at the bottom
+function newestFirst() { try { return localStorage.getItem("feedOrder") !== "old"; } catch (_) { return true; } }
+function atNewest(f) { return newestFirst() ? f.scrollTop < 40 : f.scrollHeight - f.scrollTop - f.clientHeight < 40; }
+function goNewest(f) { f.scrollTop = newestFirst() ? 0 : f.scrollHeight; }
+
 async function poll() {
   if (location.hash !== `#/films/${PV.pid}`) return;
   try {
@@ -384,9 +394,12 @@ async function poll() {
     if (!feed) return;
     const first = !PV.loaded; // on opening a film, jump to the latest entry once
     const follow = (() => { try { return localStorage.getItem("feedFollow") === "1"; } catch (_) { return false; } })();
-    const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 40;
+    const nf = newestFirst();
+    feed.classList.toggle("nf", nf);
+    const atBottom = atNewest(feed); // "at the newest end" (top or bottom, depending on the order)
+    const keepFrom = feed.scrollHeight - feed.scrollTop; // to keep the reader's place when entries are added on top
     let added = 0;
-    let lastTool = $$(".ev.tool", feed).pop();
+    let lastTool = nf ? $(".ev.tool", feed) : $$(".ev.tool", feed).pop();
     for (const ev of d.events) {
       PV.after = ev.id;
       if (ev.kind === "tool_result") {
@@ -395,25 +408,31 @@ async function poll() {
       }
       const h = eventHtml(ev);
       if (!h) continue;
-      feed.insertAdjacentHTML("beforeend", h); added++;
-      if (ev.kind === "tool") lastTool = feed.lastElementChild;
+      feed.insertAdjacentHTML(nf ? "afterbegin" : "beforeend", h); added++;
+      if (ev.kind === "tool") lastTool = nf ? feed.firstElementChild : feed.lastElementChild;
     }
+    if (nf && added && !atBottom && !first) feed.scrollTop = feed.scrollHeight - keepFrom;
     $$(".ev.tool", feed).forEach((el) => (el.onclick = () => el.classList.toggle("open")));
     $$(".ev.image img", feed).forEach((el) => (el.onclick = () => openFile(el.dataset.open)));
-    if (first || (follow && atBottom && added)) feed.scrollTop = feed.scrollHeight;
+    if (first || (follow && atBottom && added)) goNewest(feed);
     else if (added && !atBottom) { PV.unseen = (PV.unseen || 0) + added; } // the reader is scrolled up: leave them there
     PV.loaded = true;
     const pill = $("#feed-new");
     if (pill) {
       if (atBottom && !added) PV.unseen = 0;
       pill.style.display = PV.unseen ? "" : "none";
-      pill.textContent = `↓ ${PV.unseen} new`;
+      pill.textContent = `${nf ? "↑" : "↓"} ${PV.unseen} new`;
+      pill.classList.toggle("top", nf);
     }
     const prev = PV.project;
     renderHeader(d.project);
     const L = d.live;
-    $("#live").innerHTML = L.running && (L.current || L.lines.length)
-      ? `<div class="live"><div class="now">${L.current ? "● " + esc(L.current) : ""}</div>${esc(L.lines.slice(-14).join("\n"))}</div>` : "";
+    // live progress (e.g. the render): newest line first when the log is newest-first, shown above the log
+    const liveLines = nf ? L.lines.slice(-14).reverse() : L.lines.slice(-14);
+    const liveHtml = L.running && (L.current || L.lines.length)
+      ? `<div class="live"><div class="now">${L.current ? "● " + esc(L.current) : ""}</div>${esc(liveLines.join("\n"))}</div>` : "";
+    $("#live-top").innerHTML = nf ? liveHtml : "";
+    $("#live").innerHTML = nf ? "" : liveHtml;
     const changed = d.events.some((e) => ["tool_result", "done", "system"].includes(e.kind));
     if (changed && Date.now() - PV.lastFileRefresh > 4000 && ["files", "preview"].includes(PV.tab)) { PV.lastFileRefresh = Date.now(); refreshFiles(); }
     if (prev && prev.status !== d.project.status && PV.tab === "publish") renderTab();

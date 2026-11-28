@@ -312,3 +312,9 @@ label.follow input { margin: 0; }
 
 .nettbl{width:100%;border-collapse:collapse;font-size:13px}.nettbl td{padding:6px 8px;border-top:1px solid var(--line,#2a2f3a);vertical-align:top}.nettbl td:first-child{width:24px}
 .relaybox{margin:12px 0;padding:10px 12px;border:1px solid var(--line,#2a2f3a);border-radius:10px}.relaybox summary{cursor:pointer}
+
+#feed-order{width:auto;padding:3px 6px;font-size:12px}
+.feed-new.top{top:8px;bottom:auto}
+#live-top .live{margin-bottom:8px}
+.ev.stage{font-weight:600;text-transform:capitalize;border-top:1px solid var(--line,#2a2f3a);padding-top:8px;margin-top:6px}
+.feed.nf .ev.stage{border-top:0;padding-top:0;margin-top:0;border-bottom:1px solid var(--line,#2a2f3a);padding-bottom:8px;margin-bottom:6px}
