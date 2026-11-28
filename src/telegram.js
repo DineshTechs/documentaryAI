@@ -219,7 +219,7 @@ async function filmCard(chat, pid) {
   else if (m.upload_status) lines.push(`⬆️ Upload: ${e(m.upload_status)} ${m.upload_progress || 0}%`);
   if (chatState(chat).active === pid) lines.push('📌 Active film');
   const run = st === 'running' ? [btn('■ Stop', `st:${pid}`)] : st === 'awaiting_approval' ? [btn('✓ Approve', `ap:${pid}:y`), btn('✎ Changes', `ap:${pid}:n`)]
-    : [btn(st === 'new' ? '▶ Start' : '▶ Resume', `go:${pid}`)];
+    : (st === 'done' || p.stage === 'done') ? [] : [btn(st === 'new' ? '▶ Start' : '▶ Resume', `go:${pid}`)];
   await send(chat, lines.join('\n'), kb([...run, btn('📜 Log', `lg:${pid}`)], [btn('📁 Files', `fl:${pid}`), btn('🎬 Video', `vd:${pid}`), btn('🖼 Stills', `sl:${pid}`)],
     [btn('📝 Metadata', `md:${pid}`), btn('⬆ YouTube', `up:${pid}`), btn('📌 Use', `use:${pid}`)], appLinkRow(pid)));
 }

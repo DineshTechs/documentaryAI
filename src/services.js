@@ -31,6 +31,7 @@ function startOrResume(pid) {
   if (!p) throw new Error('Film not found');
   if (p.status === 'awaiting_approval') throw new Error('Waiting for your approval - approve or request changes first.');
   if (agent.isRunning(pid)) return 'already running';
+  if (p.status === 'done' || p.stage === 'done') throw new Error('This film is finished. To change something, send the agent a message describing the change (for example "make the intro shorter").');
   if (!store.getMessages(p.id).length) { agent.kickoff(p.id); return 'started'; }
   store.addMessage(p.id, { role: 'user', text: 'Continue where you left off.' });
   store.addEvent(p.id, 'user', 'Continue');

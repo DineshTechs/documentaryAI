@@ -302,7 +302,8 @@ function renderHeader(p) {
   const acts = $("#p-actions");
   if (p.running) acts.innerHTML = `<button class="danger" id="b-stop">■ Stop</button>`;
   else if (p.status === "awaiting_approval") acts.innerHTML = "";
-  else acts.innerHTML = `<button class="primary" id="b-start">${p.status === "new" ? "▶ Start agent" : p.status === "done" ? "▶ Continue" : "▶ Resume"}</button>`;
+  else if (p.status === "done" || p.stage === "done") acts.innerHTML = `<span class="hint" title="To change something, write it to the agent below, e.g. &quot;make the intro shorter&quot;. That restarts it for the change.">✓ Finished · send a message below to change something</span>`;
+  else acts.innerHTML = `<button class="primary" id="b-start">${p.status === "new" ? "▶ Start agent" : "▶ Resume"}</button>`;
   const b1 = $("#b-start"), b2 = $("#b-stop");
   if (b1) b1.onclick = (e) => act(e.target, async () => { renderHeader(await api(`/api/projects/${p.id}/start`, { method: "POST" })); });
   if (b2) b2.onclick = (e) => act(e.target, async () => { await api(`/api/projects/${p.id}/stop`, { method: "POST" }); toast("Stopping…"); });

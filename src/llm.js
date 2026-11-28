@@ -100,27 +100,36 @@ async function chatChain(list, system, messages, tools = null, maxTokens = 8192,
       errors.push(`${cfg.label}: request is ${Math.round(size / 1000)}k characters; the free no-key limit is ${cfg.max_chars_no_key / 1000}k. Add a free Pollinations key to use it for films.`);
       continue;
     }
-    try {
-      const res = await api.chat(provider, model, system, messages, tools, maxTokens, order.length > 1 ? 2 : 4); // api.chat so tests can replace it
-      // Some services (Pollinations) answer "out of credits" as a normal reply instead of an error: treat it as one
-      if ((!res.tool_calls || !res.tool_calls.length) && /doesn'?t have enough credits|insufficient (credits|balance)|top[- ]?up\?ref=|low_balance/i.test(res.text || ''))
-        throw new LLMError(`HTTP 402: out of credits (${shortErr(res.text)})`);
-      cooling.delete(provider);
-      return { ...res, provider, model: model || providerConfig(provider).model };
-    } catch (e) {
-      const label = PROVIDERS[provider]?.label || provider;
-      // "model busy / high demand": try another model of the same provider before giving up on it
-      if (/HTTP 503|HTTP 529|overloaded|high demand|UNAVAILABLE/i.test(e.message)) {
-        const alt = await backupModel(provider, model || providerConfig(provider).model).catch(() => null);
-        if (alt) {
-          try {
-            const res = await api.chat(provider, alt, system, messages, tools, maxTokens, 2);
-            if (onSwitch) onSwitch(`${provider} ${model || ''}`.trim(), `${provider} ${alt}`, shortErr(e.message));
-            cooling.delete(provider);
-            return { ...res, provider, model: alt };
-          } catch (e2) { e.message += ` | backup model ${alt}: ${shortErr(e2.message)}`; }
-        }
+    // the chosen model first, then other models of the same provider (Settings "Backup model", or other Gemini
+    // models), skipping models that just hit their own limit
+    const primary = model || cfg.model || '';
+    const backups = await backupModels(provider, primary).catch(() => []);
+    let models = [primary, ...backups].filter((m, k, a) => m && a.indexOf(m) === k);
+    const fresh = models.filter((m) => !(modelCooling.get(`${provider}|${m}`) > Date.now()));
+    models = (fresh.length ? fresh : models).slice(0, 4);
+    if (!models.length) models = [primary];
+    let lastErr = null;
+    for (let j = 0; j < models.length; j++) {
+      const m = models[j];
+      try {
+        const res = await api.chat(provider, m, system, messages, tools, maxTokens, order.length > 1 || models.length > 1 ? 2 : 4); // api.chat so tests can replace it
+        // Some services (Pollinations) answer "out of credits" as a normal reply instead of an error: treat it as one
+        if ((!res.tool_calls || !res.tool_calls.length) && /doesn'?t have enough credits|insufficient (credits|balance)|top[- ]?up\?ref=|low_balance/i.test(res.text || ''))
+          throw new LLMError(`HTTP 402: out of credits (${shortErr(res.text)})`);
+        cooling.delete(provider);
+        if (m !== primary && lastErr && onSwitch) onSwitch(`${provider} ${primary}`.trim(), `${provider} ${m}`, shortErr(lastErr ? lastErr.message : ''));
+        return { ...res, provider, model: m || providerConfig(provider).model };
+      } catch (e) {
+        lastErr = e;
+        const mins = modelLimit(e.message);
+        if (!mins) break; // a problem with the account or connection: other models of this provider won't help
+        modelCooling.set(`${provider}|${m}`, Date.now() + mins * 60000);
+        if (j < models.length - 1) e.message += ` (trying ${models[j + 1]})`;
       }
+    }
+    {
+      const e = lastErr;
+      const label = PROVIDERS[provider]?.label || provider;
       errors.push(`${label}: ${shortErr(e.message)}`);
       coolDown(provider, e.message);
       if (i < order.length - 1 && onSwitch) onSwitch(provider, order[i + 1].provider, shortErr(e.message));
@@ -129,17 +138,30 @@ async function chatChain(list, system, messages, tools = null, maxTokens = 8192,
   throw new LLMError(errors.length > 1 ? `All AI providers failed:\n- ${errors.join('\n- ')}` : errors[0].replace(/^[^:]+: /, ''));
 }
 
-// A second model of the same provider to use when the chosen one is overloaded:
-// the "Backup model" from Settings, or for Gemini the next Flash model it offers.
-async function backupModel(provider, current) {
+// Errors that belong to one model (its own rate limit or quota, busy, not usable), not to the whole account.
+// Returns how many minutes to skip that model, or 0 when switching model won't help.
+const modelCooling = new Map(); // "provider|model" -> until
+function modelLimit(msg) {
+  if (/spending cap|spend cap|prepay|billing|credits are depleted|outstanding balance|HTTP 401|HTTP 403|invalid.*key|API key|fetch failed|ECONN|ENOTFOUND|timed out/i.test(msg)) return 0;
+  if (/HTTP 404|not found|not supported|only supports|does not support|is not available|unsupported|HTTP 400.*model/i.test(msg)) return 120;
+  if (/HTTP 429|RESOURCE_EXHAUSTED|rate.?limit|quota|too many requests|per day|per minute/i.test(msg)) return /per day|daily/i.test(msg) ? 240 : 10;
+  if (/HTTP 503|HTTP 529|overloaded|high demand|UNAVAILABLE/i.test(msg)) return 3;
+  return 0;
+}
+
+// Other models of the same provider to try: the "Backup model" from Settings, and for Gemini its other
+// Flash models (stable before preview, lighter first, as they are busy less often).
+async function backupModels(provider, current) {
   const set = (store.getSetting('providers', {}) || {})[provider] || {};
-  if (set.backup_model && set.backup_model !== current) return set.backup_model;
-  if (provider !== 'gemini') return null;
-  const list = await listModels(provider);
-  const flash = list.map((m) => m.id).filter((id) => /flash/i.test(id) && id !== current && !/image|tts|live|audio|thinking-exp|embedding|computer/i.test(id));
-  // prefer a stable model over previews, and the lighter ones (busy less often)
-  flash.sort((a, b) => (/preview|exp/i.test(a) - /preview|exp/i.test(b)) || (/lite/i.test(b) - /lite/i.test(a)));
-  return flash[0] || null;
+  const out = [];
+  if (set.backup_model && set.backup_model !== current) out.push(set.backup_model);
+  if (provider === 'gemini') {
+    const list = await listModels(provider).catch(() => []);
+    const flash = list.map((m) => m.id).filter((id) => /flash/i.test(id) && id !== current && !/image|tts|live|audio|thinking-exp|embedding|computer|robotics/i.test(id));
+    flash.sort((a, b) => (/preview|exp/i.test(a) - /preview|exp/i.test(b)) || (/lite/i.test(b) - /lite/i.test(a)) || b.localeCompare(a));
+    out.push(...flash.slice(0, 3));
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- model lists (for the Settings dropdowns)
