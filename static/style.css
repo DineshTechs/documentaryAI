@@ -311,3 +311,4 @@ label.follow input { margin: 0; }
 .seo-preview .pv { font-size: 13px; padding: 6px 8px; border-radius: 6px; background: rgba(0,0,0,.25); white-space: pre-wrap; margin: 2px 0 8px; max-height: 260px; overflow: auto; }
 
 .nettbl{width:100%;border-collapse:collapse;font-size:13px}.nettbl td{padding:6px 8px;border-top:1px solid var(--line,#2a2f3a);vertical-align:top}.nettbl td:first-child{width:24px}
+.relaybox{margin:12px 0;padding:10px 12px;border:1px solid var(--line,#2a2f3a);border-radius:10px}.relaybox summary{cursor:pointer}

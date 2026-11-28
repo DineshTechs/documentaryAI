@@ -25,12 +25,24 @@ function awaazClient() {
   const s = settings();
   const key = String(s.aiawaaz_key || '').trim();
   if (!key) throw new Error('AI Awaaz needs an API key (Settings > Narration voice). Get it from app.aiawaaz.io (Connect your AI tool).');
-  const url = s.aiawaaz_url || AIAWAAZ_URL;
-  if (!awaaz || awaaz.key !== key || awaaz.url !== url) {
-    awaaz = new McpClient(url, { authorization: `Bearer ${key.replace(/^Bearer\s+/i, '')}` });
-    awaaz.key = key;
+  const relay = relayInfo();
+  const url = relay ? `${relay.url}/mcp` : s.aiawaaz_url || AIAWAAZ_URL;
+  const sig = `${key}|${url}|${relay ? relay.key : ''}`;
+  if (!awaaz || awaaz.sig !== sig) {
+    awaaz = new McpClient(url, { authorization: `Bearer ${key.replace(/^Bearer\s+/i, '')}`, ...(relay ? { 'x-relay-key': relay.key } : {}) });
+    awaaz.sig = sig;
   }
   return awaaz;
+}
+// Optional relay (a Cloudflare Worker) for servers that can't reach app.aiawaaz.io directly
+function relayInfo() {
+  const s = settings();
+  const url = String(s.aiawaaz_relay_url || '').trim().replace(/\/+$/, '').replace(/\/mcp$/, '');
+  const key = String(s.aiawaaz_relay_key || '').trim();
+  if (!url) return null;
+  if (!/^https:\/\//.test(url)) throw new Error('The AI Awaaz relay address must start with https:// (Settings → Narration voice).');
+  if (!key) throw new Error('The AI Awaaz relay needs its relay key (Settings → Narration voice).');
+  return { url, key };
 }
 
 // Pick the argument names from the tool's own schema, so we don't depend on guessed field names.
@@ -84,10 +96,12 @@ async function aiawaazSpeech(text, voice) {
   const url = audioUrl(res);
   if (!url) throw new Error(`AI Awaaz did not return an audio link: ${resultText(res).slice(0, 300)}`);
   const UA = { 'user-agent': 'DocumentaryStudio/2.1 (+https://github.com/DineshTechs/documentaryAI) Node.js' };
-  const get = async (h) => { try { return await fetch(url, { headers: { ...UA, ...h }, signal: AbortSignal.timeout(300000) }); } catch (e) { throw new Error(netError(e, url)); } };
+  const relay = relayInfo();
+  const via = relay ? `${relay.url}/file?u=${encodeURIComponent(url)}` : url;
+  const get = async (h) => { try { return await fetch(via, { headers: { ...UA, ...(relay ? { 'x-relay-key': relay.key } : {}), ...h }, signal: AbortSignal.timeout(300000) }); } catch (e) { throw new Error(netError(e, via)); } };
   let r = await get({});
   if (r.status === 401 || r.status === 403) r = await get({ authorization: c.headers.authorization });
-  if (!r.ok) throw new Error(`Could not download the AI Awaaz audio (HTTP ${r.status}).`);
+  if (!r.ok) throw new Error(`Could not download the AI Awaaz audio (HTTP ${r.status})${relay ? ` through the relay: ${(await r.text()).slice(0, 200)}` : ''}.`);
   return Buffer.from(await r.arrayBuffer());
 }
 

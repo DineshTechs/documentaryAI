@@ -95,6 +95,14 @@ async function checkOne(svc, timeoutMs = 12000) {
 async function checkAll(only = null) {
   let ip = null;
   try { const r = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(8000), headers: { 'user-agent': UA } }); ip = (await r.json()).ip; } catch (_) { /* optional */ }
+  try {
+    const t = require('./store').getSetting('tts', {}) || {};
+    const ru = String(t.aiawaaz_relay_url || '').trim().replace(/\/+$/, '').replace(/\/mcp$/, '');
+    const m = ru.match(/^https:\/\/([^/]+)(\/.*)?$/);
+    if (m && !SERVICES.some((x) => x.relay)) SERVICES.splice(1, 0, { name: 'AI Awaaz relay (Cloudflare Worker)', host: m[1], path: `${m[2] || ''}/health`, relay: true });
+    else if (m) Object.assign(SERVICES.find((x) => x.relay), { host: m[1], path: `${m[2] || ''}/health` });
+    else { const i = SERVICES.findIndex((x) => x.relay); if (i >= 0) SERVICES.splice(i, 1); }
+  } catch (_) { /* store not ready */ }
   const list = only ? (SERVICES.filter((s) => only.includes(s.host)).length ? SERVICES.filter((s) => only.includes(s.host)) : only.map((h) => ({ name: h, host: h, path: '/' }))) : SERVICES;
   const results = await Promise.all(list.map((s) => checkOne(s).catch((e) => ({ name: s.name, host: s.host, ok: false, why: e.message }))));
   return { server_ip: ip, node: process.version, results };

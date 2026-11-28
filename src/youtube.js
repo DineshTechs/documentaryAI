@@ -22,7 +22,7 @@ function urlFromRequest(req) {
 }
 function publicUrl(req) {
   if (req) return urlFromRequest(req);
-  return config.BASE_URL || store.getSetting('public_url') || `http://localhost:${config.PORT}`;
+  return config.BASE_URL || require('./tunnel').current() || store.getSetting('public_url') || `http://localhost:${config.PORT}`;
 }
 const redirectUri = (req) => publicUrl(req) + REDIRECT_PATH;
 const creds = () => store.getSetting('youtube', {}) || {};

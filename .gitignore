@@ -6,3 +6,5 @@ tmp/
 .env.native
 deploy.config
 *.log
+tunnel_url.txt
+tools/cloudflared.exe

@@ -953,6 +953,11 @@ async function viewSettings(section = "overview") {
         <p class="hint">In app.aiawaaz.io open <b>Connect your AI tool</b> and create an API key. The app talks to AI Awaaz directly; you don't need Claude Desktop.</p>
         <div class="row">${field("t-akey", "API key", tts.aiawaaz_key, { type: "password", ph: "paste key" })}${combo("t-avoice", "Voice", tts.aiawaaz_voice, { load: true, ph: "voice ID or name", hint: "Loaded from your AI Awaaz account once the key is saved." })}</div>
         <div class="row">${field("t-aopts", "Extra options (JSON, optional)", tts.aiawaaz_options, { ph: '{"speed": 0.95}' })}<div><label>&nbsp;</label><label class="check"><input type="checkbox" id="t-aenh" ${tts.aiawaaz_enhance ? "checked" : ""}> Add emotions and pauses (V3 voices)</label></div></div>
+        <details class="relaybox" ${tts.aiawaaz_relay_url ? "open" : ""}><summary><b>Relay</b> (only if this server can't reach AI Awaaz, e.g. on shared hosting)</summary>
+          <p class="hint">Sends AI Awaaz requests through your own free Cloudflare Worker. Setup: copy the relay script below, then at <b>dash.cloudflare.com</b> → Workers &amp; Pages → Create → Hello World → Deploy → Edit code → paste it → Deploy. In the worker's Settings → Variables and Secrets add a <b>Secret</b> named <code>RELAY_KEY</code> with the relay key below. Paste the worker address here and save. Leave the address empty to connect directly.</p>
+          <div class="row">${field("t-arelay", "Relay address", tts.aiawaaz_relay_url, { ph: "https://aiawaaz-relay.yourname.workers.dev" })}${field("t-arkey", "Relay key", tts.aiawaaz_relay_key, { type: "password", ph: "press Generate" })}</div>
+          <div class="btnrow"><button class="sm" id="t-argen">Generate relay key</button><button class="sm" id="t-arscript">Copy relay script</button></div>
+        </details>
         <div class="btnrow"><button class="sm" id="t-avoices">Voice details (text)</button><button class="sm" id="t-aacct">Plan & characters left</button></div>
         <pre class="live" id="t-aout" style="display:none;max-height:320px"></pre>
       </div>
@@ -1108,6 +1113,7 @@ async function viewSettings(section = "overview") {
       channel: { name: $("#c-name").value, language: $("#c-lang").value, style: $("#c-style").value, footer: $("#c-footer").value },
       tts: { provider: ($('input[name="t-prov"]:checked') || {}).value || "none", openai_key: $("#t-okey").value, openai_voice: $("#t-ovoice").value, openai_model: $("#t-omodel").value, openai_instructions: $("#t-oinst").value,
         elevenlabs_key: $("#t-ekey").value, elevenlabs_voice: $("#t-evoice").value, elevenlabs_model: $("#t-emodel").value,
+        aiawaaz_relay_url: $("#t-arelay").value.trim(), aiawaaz_relay_key: $("#t-arkey").value.trim(),
         aiawaaz_key: $("#t-akey").value.trim(), aiawaaz_voice: $("#t-avoice").value.trim(), aiawaaz_options: $("#t-aopts").value.trim(), aiawaaz_enhance: $("#t-aenh").checked },
       telegram: { bot_token: $("#tg-token").value.trim(), enabled: $("#tg-on").checked, timezone: $("#tg-tz").value.trim() || "UTC", notify: $("#tg-notify").value },
       search: { brave_key: $("#s-brave").value }, youtube: { client_id: $("#y-id").value.trim(), client_secret: $("#y-secret").value.trim() } };
@@ -1138,6 +1144,18 @@ async function viewSettings(section = "overview") {
   $("#clear-all-logs") && ($("#clear-all-logs").onclick = (e) => act(e.target, async () => {
     if (!confirm("Clear the activity logs of ALL films? Films, files and agent memory are kept.")) return;
     const r = await api("/api/events/clear-all", { method: "POST" }); toast(`Cleared the logs of ${r.films} film${r.films === 1 ? "" : "s"}`);
+  }));
+  $("#t-argen") && ($("#t-argen").onclick = async (e) => {
+    e.preventDefault();
+    const k = [...crypto.getRandomValues(new Uint8Array(24))].map((b) => b.toString(16).padStart(2, "0")).join("");
+    const f = $("#t-arkey"); f.value = k; f.type = "text"; f.dispatchEvent(new Event("input", { bubbles: true }));
+    try { await navigator.clipboard.writeText(k); } catch (_) { /* fine */ }
+    toast("New relay key copied. Put it in the worker's RELAY_KEY secret, then Save settings here.");
+  });
+  $("#t-arscript") && ($("#t-arscript").onclick = (e) => act(e.target, async () => {
+    const t = await (await fetch("/static/aiawaaz-relay-worker.js")).text();
+    try { await navigator.clipboard.writeText(t); toast("Relay script copied. Paste it into the Cloudflare Worker editor."); }
+    catch (_) { const o = $("#t-aout"); o.style.display = ""; o.textContent = t; toast("Copy the script from the box below."); }
   }));
   $("#netchk").onclick = (e) => act(e.target, async () => {
     const o = $("#netchk-out"); o.style.display = ""; o.innerHTML = `<p class="hint">Testing… (up to 30 s)</p>`;

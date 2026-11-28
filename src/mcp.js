@@ -45,6 +45,8 @@ class McpClient {
     if (sid) this.session = sid;
     if (notify) return null;
     const text = await r.text();
+    if (/Wrong relay key|RELAY_KEY secret/.test(text)) throw new Error(`The AI Awaaz relay refused the request: ${/Wrong/.test(text) ? "the relay key in Settings → Narration voice doesn't match the worker's RELAY_KEY secret" : "the worker has no RELAY_KEY secret yet"}.`);
+    if (r.status === 502 && /Relay could not reach/.test(text)) throw new Error(JSON.parse(text).error);
     if (r.status === 401 || r.status === 403) throw new Error('AI Awaaz rejected the API key (check it in Settings > Narration voice).');
     if (!r.ok) throw new Error(`MCP server error ${r.status}: ${text.slice(0, 300)}`);
     const msg = parseResponse(text, body.id, r.headers.get('content-type') || '');

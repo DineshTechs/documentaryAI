@@ -33,12 +33,22 @@ function projectJson(p) {
 
 // ---------------------------------------------------------------- auth
 r.get('/api/health', (req, res) => json(res, { ok: true, app: 'documentary-studio', logged_in: loggedIn(req) }));
+// Too many wrong passwords from one address → locked for 15 minutes (the app can be on the internet)
+const FAILS = new Map();
+const clientIp = (req) => String(req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
 r.post('/api/login', async (req, res) => {
+  const ip = clientIp(req), now = Date.now();
+  const f = FAILS.get(ip) || { n: 0, until: 0, first: now };
+  if (f.until > now) return json(res, { error: `Too many wrong passwords. Try again in ${Math.ceil((f.until - now) / 60000)} min.` }, 429);
   const { password = '' } = await jsonBody(req);
   const a = Buffer.from(String(password)), b = Buffer.from(config.APP_PASSWORD);
   if (config.APP_PASSWORD && a.length === b.length && crypto.timingSafeEqual(a, b)) {
+    FAILS.delete(ip);
     return json(res, { ok: true }, 200, { 'set-cookie': cookieHeader(req, SESSION, { ok: true }) });
   }
+  if (now - f.first > 15 * 60000) Object.assign(f, { n: 0, first: now });
+  f.n += 1; if (f.n >= 10) f.until = now + 15 * 60000;
+  FAILS.set(ip, f); if (FAILS.size > 5000) FAILS.clear();
   await new Promise((s) => setTimeout(s, 1000));
   json(res, { error: config.APP_PASSWORD ? 'Wrong password' : 'Set APP_PASSWORD in .env first' }, 403);
 });

@@ -31,7 +31,7 @@ const COMMANDS = [
   ['upload', 'Upload to YouTube'], ['ideas', 'Idea board'], ['idea', 'Add idea: /idea Title | notes'],
   ['brainstorm', 'AI ideas: /brainstorm theme'], ['makefilm', 'Film from idea: /makefilm 5'],
   ['plan', 'Release date: /plan 5 2026-12-10'], ['calendar', 'Upcoming releases'],
-  ['model', 'Show/set model: /model anthropic claude-opus-5-5'], ['models', 'Configured AI providers'], ['help', 'All commands'],
+  ['model', 'Show/set model: /model anthropic claude-opus-5-5'], ['models', 'Configured AI providers'], ['link', 'Web app address (tunnel)'], ['help', 'All commands'],
 ];
 
 const HELP = `<b>Documentary Studio bot</b>
@@ -61,7 +61,10 @@ Send a photo with caption <code>thumbnail</code> → YouTube thumbnail.
 /makefilm 5 · /plan 5 2026-12-10 · /calendar
 
 <b>AI</b>
-/models · /model (show) · /model openai gpt-x (active film) · /model default anthropic claude-sonnet-5-5`;
+/models · /model (show) · /model openai gpt-x (active film) · /model default anthropic claude-sonnet-5-5
+
+<b>Web app</b>
+/link: the web app's address when it runs on your PC with start_tunnel.bat`;
 
 // ---------------------------------------------------------------- API client
 class TG {
@@ -259,6 +262,11 @@ function logText(pid, n = 15) {
 // ---------------------------------------------------------------- commands
 const H = {};
 H.help = (c) => send(c, HELP);
+H.link = (c) => {
+  const u = require('./tunnel').current() || youtube.publicUrl();
+  return u.startsWith('https://') ? send(c, `🌐 Web app: ${u}`, kb([btn('Open the web app', null, u)]))
+    : send(c, 'The web app has no public address right now. On your PC, run <b>start_tunnel.bat</b>.');
+};
 H.films = async (c) => {
   const rows = [...store.projects()].sort((a, b) => b.updated - a.updated).slice(0, 20);
   if (!rows.length) return send(c, 'No films yet. Create one with\n<code>/new Title | topic | 90</code>');
@@ -649,6 +657,7 @@ function start() {
   if (started || config.TELEGRAM_DISABLED) return;
   started = true;
   store.onEvent((ev) => { notifyEvent(ev).catch(() => {}); });
+  require('./tunnel').watch((u) => { broadcast(`🌐 The web app is online at a new address:\n${u}\n\n(Send /link any time to get it again.)`, kb([btn('Open the web app', null, u)])).catch(() => {}); });
   configure();
   setInterval(configure, 20000).unref();
 }
