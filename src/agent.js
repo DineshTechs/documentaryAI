@@ -548,8 +548,6 @@ async function loop(r) {
   try {
     let p = store.getProject(pid);
     fs.mkdirSync(path.join(projectRoot(p), 'uploads'), { recursive: true });
-    const providers = llm.chain(p.provider || null, p.model || null);
-    if (!providers.length) throw new llm.LLMError('No AI provider set. Add a key and set the priority in Settings → AI models.');
     let lastUsed = null;
     for (let step = 0; step < config.AGENT_MAX_STEPS; step++) {
       if (r.cancelled) { store.updateProject(pid, { status: 'stopped' }); store.addEvent(pid, 'system', 'Stopped'); return; }
@@ -559,6 +557,10 @@ async function loop(r) {
       const countStep = () => eta.addWork(pid, stepStage, (Date.now() - stepStart) / 1000);
       const msgs = await prepareMessages(p, store.getMessages(pid));
       const system = systemPrompt(p);
+      // read the priority list every step, so changes in Settings apply to a film that is already running
+      if (store.reloadSettings) { try { await store.reloadSettings(); } catch (_) { /* keep current */ } }
+      const providers = llm.chain(p.provider || null, p.model || null);
+      if (!providers.length) throw new llm.LLMError('No AI provider set. Add a key and set the priority in Settings → AI models.');
       r.current = 'thinking';
       const res = await llm.chatChain(providers, system, msgs, TOOLS, 8192, (from, to, err) =>
         store.addEvent(pid, 'system', `⚠️ ${llm.PROVIDERS[from]?.label || from} failed (${err}). Switching to ${llm.PROVIDERS[to]?.label || to}.`));

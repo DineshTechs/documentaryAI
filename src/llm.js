@@ -12,7 +12,7 @@ const PROVIDERS = {
     note: 'Uses an API key from platform.openai.com (pay-as-you-go credits). A ChatGPT Plus/Pro subscription does not include API access.' },
   gemini: { label: 'Google Gemini', base_url: 'https://generativelanguage.googleapis.com/v1beta/openai', kind: 'openai', model_hint: 'your Gemini model id' },
   openrouter: { label: 'OpenRouter', base_url: 'https://openrouter.ai/api/v1', kind: 'openai', model_hint: 'e.g. anthropic/claude-sonnet-5-5' },
-  deepseek: { label: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', kind: 'openai', model_hint: 'e.g. deepseek-chat' },
+  deepseek: { label: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', kind: 'openai', model_hint: 'e.g. deepseek-flash' },
   groq: { label: 'Groq', base_url: 'https://api.groq.com/openai/v1', kind: 'openai', model_hint: 'your Groq model id' },
   mistral: { label: 'Mistral', base_url: 'https://api.mistral.ai/v1', kind: 'openai', model_hint: 'e.g. mistral-large-latest' },
   xai: { label: 'xAI (Grok)', base_url: 'https://api.x.ai/v1', kind: 'openai', model_hint: 'your Grok model id' },
@@ -294,8 +294,8 @@ const PRICE_TABLE = [
   [/claude-sonnet-5/i, [2, 10, 0.10, 2.5]],
   [/claude-opus-5/i, [4, 20, 0.20, 5]],
   [/claude-fable-5|claude-mythos-5/i, [8, 40, 0.20, 10]],
-  [/deepseek.*flash/i, [0.14, 0.28, 0.014, 0]],
-  [/deepseek.*pro/i, [1.74, 3.48, 0.145, 0]],
+  [/deepseek.*flash/i, [0.3, 1.2, 0.006, 0]], // official peak rates (off-peak is half), Nov 2026
+  [/deepseek.*pro/i, [1.32, 3.96, 0.044, 0]],
 ];
 const FREE_PROVIDERS = { pollinations: 'free', gemini: 'free tier' }; // Gemini: set a price if billing is on
 function priceFor(provider, model) {
