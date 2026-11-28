@@ -136,6 +136,13 @@ async function commonsDownload(projectDir, fileTitle, saveAs) {
   return { file: rel, bytes: buf.length, ...credit };
 }
 
+// The file an earlier commons_download saved for this Commons title, if any (from credits.json)
+function alreadyDownloaded(projectDir, fileTitle) {
+  const title = String(fileTitle || '').startsWith('File:') ? fileTitle : `File:${fileTitle}`;
+  try { const c = JSON.parse(fs.readFileSync(path.join(projectDir, 'credits.json'), 'utf8')); const hit = (Array.isArray(c) ? c : c.items || []).find((x) => x.title === title); return hit ? hit.file : null; }
+  catch (_) { return null; }
+}
+
 function addCredit(projectDir, credit) {
   const f = path.join(projectDir, 'credits.json');
   let list = [];
@@ -147,4 +154,5 @@ function addCredit(projectDir, credit) {
   fs.writeFileSync(path.join(projectDir, 'credits.md'), md.join('\n') + '\n');
 }
 
-module.exports = { webSearch, webFetch, commonsSearch, commonsDownload, addCredit, stripHtml };
+module.exports = {
+  alreadyDownloaded, webSearch, webFetch, commonsSearch, commonsDownload, addCredit, stripHtml };

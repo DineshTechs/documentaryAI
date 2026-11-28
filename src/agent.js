@@ -102,6 +102,51 @@ function languageRules(lang) {
   return `- Narration and on-screen text in ${lang}.`;
 }
 
+// What is already done, read from the workspace and the film's history (so a resume never starts over)
+function progressReport(p) {
+  const root = projectRoot(p);
+  const ex = (f) => { try { return fs.statSync(path.join(root, f)); } catch (_) { return null; } };
+  const ls = (d, re = /./) => { try { return fs.readdirSync(path.join(root, d)).filter((f) => !f.startsWith('.') && re.test(f)); } catch (_) { return []; } };
+  const lines = [];
+  for (const f of ['script.md', 'beats.md', 'sources.md']) { const st = ex(f); if (st && st.size > 20) lines.push(`- ${f}: written (${Math.round(st.size / 100) / 10} KB)`); }
+  let film = null; try { film = JSON.parse(fs.readFileSync(path.join(root, 'film.json'), 'utf8')); } catch (_) { /* none yet */ }
+  if (film) {
+    const nar = film.narration || [];
+    lines.push(`- film.json: ${nar.length} narration lines, ${(film.scenes || []).length} scenes${film.look ? `, look "${film.look}"` : ''}`);
+    if (nar.length) {
+      let meta = {}; try { meta = JSON.parse(fs.readFileSync(path.join(root, 'audio', '.tts.json'), 'utf8')); } catch (_) {}
+      const t = tts.settings(), voiceKey = `${t.provider}:${t[`${t.provider}_voice`] || ''}`;
+      const sig = (l) => require('crypto').createHash('sha1').update(`${voiceKey}\n${l.text}`).digest('hex').slice(0, 16);
+      const done = nar.filter((l) => ex(l.audio || `audio/${l.id}.mp3`) && (!meta[l.id] || meta[l.id] === sig(l))).length;
+      lines.push(`- Voice: ${done} of ${nar.length} lines have up-to-date audio${done === nar.length ? ' (voice stage done; tts_generate would reuse them anyway)' : ''}`);
+    }
+  }
+  const imgs = ls('images', /\.(jpe?g|png|webp|gif)$/i);
+  if (imgs.length) lines.push(`- images/: ${imgs.length} downloaded (${imgs.slice(0, 12).join(', ')}${imgs.length > 12 ? ', …' : ''})`);
+  const ups = ls('uploads');
+  if (ups.length) lines.push(`- uploads/ (user's files): ${ups.slice(0, 10).join(', ')}${ups.length > 10 ? ', …' : ''}`);
+  const outs = ls('out', /\.(mp4|png|jpg|srt)$/i);
+  if (outs.length) lines.push(`- out/: ${outs.slice(0, 12).join(', ')}${outs.length > 12 ? ', …' : ''}`);
+  const approved = (p.approved || []).map((a) => `"${a.title}"`);
+  if (!approved.length) {
+    // older films: read approvals from the activity history
+    let lastAsk = null;
+    for (const ev of store.getEvents(p.id) || []) {
+      if (ev.kind === 'approval') lastAsk = ev.text;
+      else if (ev.kind === 'user' && /^Approved/.test(ev.text || '') && lastAsk) { approved.push(`"${lastAsk}"`); lastAsk = null; }
+    }
+  }
+  if (approved.length) lines.push(`- Approved by the user: ${approved.join(', ')}`);
+  if (!lines.length) return '';
+  return `\n## Work already done (read from the workspace just now)
+Current stage: ${p.stage || 'story'}
+${lines.join('\n')}
+REUSE this work. Do not redo a finished stage, re-research, re-write approved files, re-download images that exist,
+or ask again for an approval already given, unless the user asks for a change or something is actually broken.
+When resuming, check the files (list_files / read_file) and continue from the first unfinished step.
+tts_generate and the renders reuse unchanged lines and scenes automatically, so calling them again is cheap.\n`;
+}
+
 function systemPrompt(p) {
   const channel = store.getSetting('channel', {}) || {};
   const t = tts.settings();
@@ -124,7 +169,7 @@ You work only through your tools. Follow the guide below closely.
   - Photos should fill most of the frame (w 0.7-0.9); use one photo per scene rather than a busy board.
   - End with a line that makes people want to rewatch or comment. No "subscribe".` : ''}
 - Workspace files: film.json, script.md, beats.md, sources.md, credits.md, images/, audio/, uploads/ (the user's own files), out/
-
+${progressReport(p)}
 ## Channel
 - Name: ${channel.name || '(not set)'}; style and audience: ${channel.style || '(not set)'}
 
@@ -213,6 +258,7 @@ function respondApproval(pid, approved, feedback = '', alreadyLogged = false) {
     ? `The user APPROVED this.${feedback ? ` Their note: ${feedback}` : ''} Continue.`
     : `The user requested CHANGES: ${feedback || '(no details)'}. Make them, then ask for approval again.`;
   if (!alreadyLogged) store.addEvent(pid, 'user', (approved ? 'Approved' : 'Changes requested') + (feedback ? `: ${feedback}` : ''));
+  if (approved) store.updateProject(pid, { approved: [...(p.approved || []), { title: pending.title, at: new Date().toISOString() }].slice(-30) });
   store.addMessage(pid, { role: 'tool', tool_call_id: pending.tool_call_id, name: 'request_approval', content });
   store.updateProject(pid, { pending: null, status: 'idle' });
   start(pid);
@@ -222,9 +268,11 @@ function respondApproval(pid, approved, feedback = '', alreadyLogged = false) {
 function kickoff(pid) {
   const p = store.getProject(pid);
   if (store.getMessages(p.id).length) return start(p.id);
-  store.addMessage(p.id, { role: 'user', text:
-    `Make the film "${p.title}". Topic: ${p.topic || p.title}. ${p.brief || ''}\n` +
-    'Start with the Story stage: research, fact-check, write script.md, beats.md and sources.md, then ask me to approve the beat table.' });
+  const earlier = progressReport(p);
+  store.addMessage(p.id, { role: 'user', text: earlier
+    ? `Make the film "${p.title}". Topic: ${p.topic || p.title}. ${p.brief || ''}\nWork from an earlier session is already in the workspace (see "Work already done"). Check it and continue from the first unfinished step; don't start over.`
+    : `Make the film "${p.title}". Topic: ${p.topic || p.title}. ${p.brief || ''}\n` +
+      'Start with the Story stage: research, fact-check, write script.md, beats.md and sources.md, then ask me to approve the beat table.' });
   store.addEvent(p.id, 'system', 'Agent started');
   return start(p.id);
 }
@@ -289,6 +337,15 @@ async function prepareMessages(p, msgs) {
 }
 
 // ---------------------------------------------------------------- tool execution
+// Research results are kept for 7 days in the film's .cache folder
+async function cached(root, kind, key, fn) {
+  const dir = path.join(root, '.cache');
+  const f = path.join(dir, `${kind}-${require('crypto').createHash('sha1').update(key).digest('hex').slice(0, 16)}.json`);
+  try { const c = JSON.parse(fs.readFileSync(f, 'utf8')); if (Date.now() - c.at < 7 * 864e5) return typeof c.v === 'string' ? `${c.v}\n(reused from an earlier identical ${kind})` : c.v; } catch (_) { /* not cached */ }
+  const v = await fn();
+  if (v && (typeof v !== 'string' || !/^(ERROR|No results)/i.test(v)) && (!Array.isArray(v) || v.length)) { try { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(f, JSON.stringify({ at: Date.now(), v })); } catch (_) {} }
+  return v;
+}
 function readFilmJson(p) {
   const f = safePath(p, 'film.json');
   if (!fs.existsSync(f)) throw new Error('film.json does not exist yet. Write it first (narration + scenes).');
@@ -360,14 +417,16 @@ async function executeTool(r, p, name, a) {
       walk(base);
       return { content: out.join('\n') || '(empty)' };
     }
-    case 'web_search': return { content: await research.webSearch(a.query || '') };
-    case 'web_fetch': return { content: await research.webFetch(a.url || '') };
+    case 'web_search': return { content: await cached(root, 'web_search', a.query || '', () => research.webSearch(a.query || '')) };
+    case 'web_fetch': return { content: await cached(root, 'web_fetch', a.url || '', () => research.webFetch(a.url || '')) };
     case 'commons_search': {
-      const res = await research.commonsSearch(a.query || '', a.limit || 12);
+      const res = await cached(root, 'commons_search', `${a.query || ''}|${a.limit || 12}`, () => research.commonsSearch(a.query || '', a.limit || 12));
       if (!res.length) return { content: 'No images found. Try simpler or different keywords (names, places, years).' };
       return { content: res.map((x, i) => `${i + 1}. ${x.title}  [${x.width}x${x.height}] ${x.free ? '' : '(NOT FREE - cannot use) '}licence: ${x.license || '?'}\n   by ${x.author || '?'}${x.date ? ', ' + x.date : ''}\n   ${x.description}`).join('\n') };
     }
     case 'commons_download': {
+      const have = research.alreadyDownloaded(root, a.title);
+      if (have && fs.existsSync(path.join(root, have))) return { content: `Already downloaded earlier: ${have} (reused, credits already in credits.md).` };
       const d = await research.commonsDownload(root, a.title, a.save_as);
       return { content: `Saved ${d.file} (${Math.round(d.bytes / 1024)} KB). Licence ${d.license}, by ${d.author}. Added to credits.md.` };
     }
@@ -387,8 +446,10 @@ async function executeTool(r, p, name, a) {
         if (r.cancelled) break;
         const rel = l.audio || `audio/${l.id}.mp3`;
         const f = safePath(p, rel, true);
-        if (fs.existsSync(f) && (!a.force || meta[l.id] === sig(l))) {
-          out.push(`${l.id}: kept (${(await ff.duration(f)).toFixed(2)} s)${a.force ? ', text and voice unchanged' : ''}`); continue;
+        // Reuse the audio unless the line's text or the voice changed since it was made (or force without a record)
+        const same = meta[l.id] ? meta[l.id] === sig(l) : !a.force;
+        if (fs.existsSync(f) && same) {
+          out.push(`${l.id}: kept (${(await ff.duration(f)).toFixed(2)} s, unchanged)`); continue;
         }
         r.current = `voice ${l.id}`;
         let res;
@@ -490,7 +551,6 @@ async function loop(r) {
     const providers = llm.chain(p.provider || null, p.model || null);
     if (!providers.length) throw new llm.LLMError('No AI provider set. Add a key and set the priority in Settings → AI models.');
     let lastUsed = null;
-    const system = systemPrompt(p);
     for (let step = 0; step < config.AGENT_MAX_STEPS; step++) {
       if (r.cancelled) { store.updateProject(pid, { status: 'stopped' }); store.addEvent(pid, 'system', 'Stopped'); return; }
       while (r.inbox.length) store.addMessage(pid, { role: 'user', text: r.inbox.shift() });
@@ -498,6 +558,7 @@ async function loop(r) {
       const stepStart = Date.now(), stepStage = p.stage; // for the time estimate: agent working time per stage
       const countStep = () => eta.addWork(pid, stepStage, (Date.now() - stepStart) / 1000);
       const msgs = await prepareMessages(p, store.getMessages(pid));
+      const system = systemPrompt(p);
       r.current = 'thinking';
       const res = await llm.chatChain(providers, system, msgs, TOOLS, 8192, (from, to, err) =>
         store.addEvent(pid, 'system', `⚠️ ${llm.PROVIDERS[from]?.label || from} failed (${err}). Switching to ${llm.PROVIDERS[to]?.label || to}.`));
@@ -585,7 +646,7 @@ function manualRender(pid, quality = 'final') {
 }
 
 module.exports = {
-  needsUser,
+  needsUser, progressReport,
   filmLanguage,
   manualRender,
   STAGES, TOOLS, projectRoot, safePath, isRunning, liveOutput, start, stop, sendUserMessage, respondApproval,
