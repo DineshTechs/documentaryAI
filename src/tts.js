@@ -19,7 +19,7 @@ const AIAWAAZ_URL = 'https://app.aiawaaz.io/api/mcp';
 const settings = () => store.getSetting('tts', {}) || {};
 
 // ---------------------------------------------------------------- AI Awaaz (MCP)
-const { McpClient, resultText } = require('./mcp');
+const { McpClient, resultText, netError } = require('./mcp');
 let awaaz = null;
 function awaazClient() {
   const s = settings();
@@ -83,8 +83,10 @@ async function aiawaazSpeech(text, voice) {
   }
   const url = audioUrl(res);
   if (!url) throw new Error(`AI Awaaz did not return an audio link: ${resultText(res).slice(0, 300)}`);
-  let r = await fetch(url, { signal: AbortSignal.timeout(300000) });
-  if (r.status === 401 || r.status === 403) r = await fetch(url, { headers: { authorization: c.headers.authorization }, signal: AbortSignal.timeout(300000) });
+  const UA = { 'user-agent': 'DocumentaryStudio/2.1 (+https://github.com/DineshTechs/documentaryAI) Node.js' };
+  const get = async (h) => { try { return await fetch(url, { headers: { ...UA, ...h }, signal: AbortSignal.timeout(300000) }); } catch (e) { throw new Error(netError(e, url)); } };
+  let r = await get({});
+  if (r.status === 401 || r.status === 403) r = await get({ authorization: c.headers.authorization });
   if (!r.ok) throw new Error(`Could not download the AI Awaaz audio (HTTP ${r.status}).`);
   return Buffer.from(await r.arrayBuffer());
 }

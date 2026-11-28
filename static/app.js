@@ -1006,6 +1006,8 @@ async function viewSettings(section = "overview") {
       </div>
       <h3 style="margin-top:20px">Server check</h3><p class="hint">Checks the graphics engine, ffmpeg, fonts and database, then renders a short test clip to measure how fast this server makes films.</p>
       <button class="sm" id="chk">Run server check</button><pre class="live" id="chk-out" style="display:none"></pre>
+      <h3 style="margin-top:20px">Connection test</h3><p class="hint">Checks whether this server can reach AI Awaaz, the AI providers, Wikimedia, YouTube and Telegram, and if not, says why (hosting firewall, bot protection, DNS…) and whom to ask.</p>
+      <button class="sm" id="netchk">Test connections</button><div id="netchk-out" style="display:none;margin-top:10px"></div>
       <h3 style="margin-top:20px">Activity logs</h3><p class="hint">Removes the activity feed of every film to free database space. Films, their files and the agent's memory are kept.</p>
       <button class="sm danger" id="clear-all-logs">🧹 Clear all activity logs</button>
     </section>
@@ -1137,6 +1139,14 @@ async function viewSettings(section = "overview") {
     if (!confirm("Clear the activity logs of ALL films? Films, files and agent memory are kept.")) return;
     const r = await api("/api/events/clear-all", { method: "POST" }); toast(`Cleared the logs of ${r.films} film${r.films === 1 ? "" : "s"}`);
   }));
+  $("#netchk").onclick = (e) => act(e.target, async () => {
+    const o = $("#netchk-out"); o.style.display = ""; o.innerHTML = `<p class="hint">Testing… (up to 30 s)</p>`;
+    const r = await api("/api/net/check");
+    const bad = r.results.filter((x) => !x.ok);
+    o.innerHTML = `<p class="hint">This server's public IP address: <code>${esc(r.server_ip || "unknown")}</code> · Node.js ${esc(r.node)}${bad.length ? " · give this IP to support if a service blocks it" : ""}</p>
+      <table class="nettbl">${r.results.map((x) => `<tr><td>${x.ok ? "✅" : "❌"}</td><td><b>${esc(x.name)}</b><div class="hint"><code>${esc(x.host)}</code></div></td>
+      <td>${x.ok ? `<span class="hint">${esc((x.steps || []).slice(-1)[0] || "ok")}</span>` : `${esc(x.why || "failed")}<div class="hint"><b>Fix:</b> ${esc(x.fix || "")}</div>`}</td></tr>`).join("")}</table>`;
+  });
   $("#chk").onclick = (e) => act(e.target, async () => { const r = await api("/api/setup-check"); const o = $("#chk-out"); o.style.display = ""; o.textContent = (r.ok ? "✓ All good\n\n" : "✗ Problems found\n\n") + r.output; });
 }
 

@@ -1,4 +1,16 @@
 'use strict';
+const UA = 'DocumentaryStudio/2.1 (+https://github.com/DineshTechs/documentaryAI) Node.js';
+// "fetch failed" hides the real reason; show it, in words
+function netError(e, url) {
+  const c = (e && e.cause) || {};
+  const code = c.code || e.code || '';
+  const host = (() => { try { return new URL(url).host; } catch (_) { return url; } })();
+  if (e.name === 'TimeoutError' || /ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT/.test(code)) return `No answer from ${host} (timed out). On shared hosting this usually means the host's firewall blocks outgoing connections: run Settings → System → Connection test.`;
+  if (/ENOTFOUND|EAI_AGAIN/.test(code)) return `This server can't look up ${host} (DNS ${code}).`;
+  if (/ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENETUNREACH/.test(code)) return `Connection to ${host} was refused or cut (${code}). The hosting firewall may block it: run Settings → System → Connection test.`;
+  if (/CERT|SSL|TLS/i.test(code + (c.message || ''))) return `Secure connection to ${host} failed (${code || c.message}).`;
+  return `Request to ${host} failed: ${code || c.message || e.message}`;
+}
 // Minimal MCP client (Streamable HTTP transport): lets the app call tools on MCP servers such as AI Awaaz.
 // Handles JSON or Server-Sent-Events responses and the Mcp-Session-Id header.
 
@@ -17,10 +29,18 @@ class McpClient {
   async rpc(method, params, { notify = false, timeoutMs = 180000 } = {}) {
     const body = { jsonrpc: '2.0', method, ...(params ? { params } : {}) };
     if (!notify) body.id = this.nextId++;
-    const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream', ...this.headers };
+    const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'user-agent': UA, ...this.headers };
     if (this.session) headers['mcp-session-id'] = this.session;
     if (this.protocol) headers['mcp-protocol-version'] = this.protocol;
-    const r = await fetch(this.url, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
+    let r;
+    try { r = await fetch(this.url, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) }); }
+    catch (e) { throw new Error(netError(e, this.url)); }
+    if (r.status === 403) {
+      const t = await r.text();
+      throw new Error(/cloudflare|just a moment|cf-ray|error 10\d\d|access denied/i.test(t)
+        ? `${new URL(this.url).host} blocked this server (HTTP 403, bot protection). Hosting-company IP addresses are often blocked: run Settings → System → Connection test, and ask the service to allow your server's IP.`
+        : `HTTP 403 from ${new URL(this.url).host}: ${t.slice(0, 200)}`);
+    }
     const sid = r.headers.get('mcp-session-id');
     if (sid) this.session = sid;
     if (notify) return null;
@@ -89,4 +109,5 @@ function resultText(res) {
   return parts.join('\n');
 }
 
-module.exports = { McpClient, resultText, parseResponse };
+module.exports = {
+  netError, McpClient, resultText, parseResponse };
