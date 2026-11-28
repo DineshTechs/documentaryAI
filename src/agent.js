@@ -136,6 +136,11 @@ explanations, beats.md and sources.md descriptions. Quote the narration in the f
 your own words in English.
 ${languageRules(filmLanguage(p))}
 
+## Keep working
+Never end a reply by announcing the next step ("Next I'll…", "Now I'll move to…"): do it in the same reply by calling
+the tool. Reply without a tool call ONLY when you need the user's answer, and then ask a clear question. After the user
+approves a step, start the next step straight away.
+
 ## Voice
 - Narration voice provider: ${t.provider || 'none'}${t.provider && t.provider !== 'none' && !tts.UPLOAD_PROVIDERS.has(t.provider) ? `; voice set in Settings: ${(t.provider === 'aiawaaz' ? t.aiawaaz_voice : t.provider === 'elevenlabs' ? t.elevenlabs_voice : t.provider === 'openai' ? t.openai_voice : '') || "(the provider's default)"}. tts_generate always uses this voice (it has no voice argument; to change voice the user changes Settings).` : ''}${(!t.provider || t.provider === 'none') ? ' - no voice is configured, so audio will be silent and timing estimated. Tell the user once that they can add a voice in Settings, then carry on.' : ''}
 ${tts.UPLOAD_PROVIDERS.has(t.provider) ? '- The voice-over is recorded OUTSIDE the app. Do NOT call tts_generate. In the Voice stage:\n  ' + tts.uploadNote(t.provider).split('\n').slice(1).join('\n  ') : ''}
@@ -465,6 +470,17 @@ function describeCall(name, a) {
   return JSON.stringify(a).slice(0, 200);
 }
 
+// Does this tool-less reply wait for the user (a question / request), or is it just narrating the next step?
+function needsUser(text) {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  const tail = t.slice(-400);
+  if (/\?/.test(tail)) return true;
+  if (/\b(reply|let me know|tell me|please (send|upload|provide|choose|pick|confirm|add|check|share|set)|do you want|would you like|should i|which (one|option)|waiting for (you|your)|your (answer|choice|decision|input)|need(s)? (you|your)|option [a-c1-3]\b)/i.test(tail)) return true;
+  if (/\b(finished|is done|complete[d]?\b.*film|uploaded)\b/i.test(tail) && !/\b(next|now i'?ll|i will|i'?ll)\b/i.test(tail)) return true;
+  return false;
+}
+
 // ---------------------------------------------------------------- main loop
 async function loop(r) {
   const pid = r.pid;
@@ -494,10 +510,18 @@ async function loop(r) {
       if (!res.tool_calls || !res.tool_calls.length) {
         countStep();
         if (r.inbox.length) continue;
+        // The model sometimes says what it will do next and then stops. Unless it is asking the user something, keep it going.
+        if (needsUser(res.text) === false && (r.nudges || 0) < 2 && store.getProject(pid).stage !== 'done') {
+          r.nudges = (r.nudges || 0) + 1;
+          store.addMessage(pid, { role: 'user', text: '(automatic) Go ahead: do that now by calling the tools. Stop without a tool call only if you need an answer from me, and then ask a clear question.' });
+          continue;
+        }
+        r.nudges = 0;
         store.updateProject(pid, { status: 'idle' });
         store.addEvent(pid, 'waiting', res.text || 'The agent paused.');
         return;
       }
+      r.nudges = 0;
       let paused = false, finished = false;
       for (const tc of res.tool_calls) {
         const name = tc.name, a = tc.args || {};
@@ -561,6 +585,7 @@ function manualRender(pid, quality = 'final') {
 }
 
 module.exports = {
+  needsUser,
   filmLanguage,
   manualRender,
   STAGES, TOOLS, projectRoot, safePath, isRunning, liveOutput, start, stop, sendUserMessage, respondApproval,

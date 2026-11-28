@@ -7,22 +7,22 @@ let cached = null;
 
 function ffmpegPath() {
   if (cached) return cached;
-  const candidates = [];
+  const candidates = [], tried = [];
   if (process.env.FFMPEG_PATH) candidates.push(process.env.FFMPEG_PATH);
-  try { const p = require('ffmpeg-static'); if (p) candidates.push(p); } catch (_) { /* optional */ }
+  try { const p = require('ffmpeg-static'); if (p) candidates.push(p); else tried.push('ffmpeg-static: no binary for this system'); }
+  catch (e) { tried.push(`ffmpeg-static: not installed (${e.code || e.message})`); }
   candidates.push('ffmpeg', '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg');
   for (const c of candidates) {
     try {
-      if (c.includes('/') && !fs.existsSync(c)) continue;
-      const r = spawnSync(c, ['-hide_banner', '-version'], { timeout: 15000 });
-      if (r.status === 0) {
-        try { fs.chmodSync(c, 0o755); } catch (_) { /* fine */ }
-        cached = c;
-        return c;
-      }
-    } catch (_) { /* try next */ }
+      if (c.includes('/') && !fs.existsSync(c)) { tried.push(`${c}: file missing`); continue; }
+      if (c.includes('/')) { try { fs.chmodSync(c, 0o755); } catch (_) { /* may not own it */ } } // npm on some hosts drops the run permission
+      const r = spawnSync(c, ['-hide_banner', '-version'], { timeout: 30000 });
+      if (r.status === 0) { cached = c; return c; }
+      tried.push(`${c}: ${r.error ? r.error.code || r.error.message : `exit ${r.status}${r.signal ? ` (${r.signal})` : ''} ${String(r.stderr || '').trim().slice(0, 150)}`}`);
+    } catch (e) { tried.push(`${c}: ${e.message}`); }
   }
-  throw new Error('ffmpeg not found. Run "npm install" (installs ffmpeg-static) or set FFMPEG_PATH in .env.');
+  throw new Error('ffmpeg not found or not runnable on this server. What was tried:\n- ' + tried.join('\n- ')
+    + '\nFix: in the server terminal run  node node_modules/ffmpeg-static/install.js  (downloads ffmpeg), or set FFMPEG_PATH to an ffmpeg binary, then restart the app.');
 }
 
 // Run ffmpeg, resolve with stderr text. Rejects with the tail of stderr on failure.

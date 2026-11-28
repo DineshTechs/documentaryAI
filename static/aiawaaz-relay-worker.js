@@ -15,7 +15,10 @@ const MCP_URL = 'https://app.aiawaaz.io/api/mcp';
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname === '/health') return Response.json({ ok: true, relay: 'aiawaaz', key_set: !!env.RELAY_KEY });
+    if (url.pathname === '/health' || url.pathname === '/') return Response.json({
+      ok: true, relay: 'aiawaaz', key_set: !!env.RELAY_KEY,
+      note: env.RELAY_KEY ? 'The relay is running. Only Documentary Studio (with the relay key) can use it, so opening it in a browser shows nothing else.' : 'Add a Secret named RELAY_KEY in this worker\'s Settings → Variables and Secrets.',
+    });
 
     // Only your app may use this relay
     if (!env.RELAY_KEY) return Response.json({ error: 'RELAY_KEY secret is not set on this worker' }, { status: 500 });
