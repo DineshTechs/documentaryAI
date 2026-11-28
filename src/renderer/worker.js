@@ -1,4 +1,7 @@
 'use strict';
+// Few canvas helper threads (one per CPU core otherwise; see app.js)
+if (!process.env.TOKIO_WORKER_THREADS) process.env.TOKIO_WORKER_THREADS = '2';
+if (!process.env.RAYON_NUM_THREADS) process.env.RAYON_NUM_THREADS = '2';
 // Runs one render job in a separate process so the web app stays responsive.
 const r = require('./render');
 
