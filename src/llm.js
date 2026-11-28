@@ -75,7 +75,7 @@ function coolDown(name, msg) {
   if (/HTTP 429|rate.?limit|too many requests|RESOURCE_EXHAUSTED/i.test(msg)) mins = 10;
   if (/quota|insufficient|credit|billing|exceeded your current|per day|daily|HTTP 402/i.test(msg)) mins = 60;
   if (/HTTP 401|HTTP 403|invalid.*key|API key missing|unauthori[sz]ed/i.test(msg)) mins = 30;
-  if (/HTTP 5\d\d|HTTP 529|overloaded|fetch failed|timeout|ECONN|ENOTFOUND|Request failed after retries/i.test(msg)) mins = Math.max(mins, 3);
+  if (/HTTP 5\d\d|HTTP 529|overloaded|fetch failed|timeout|timed out|ECONN|ENOTFOUND|refused|Request failed after retries/i.test(msg)) mins = Math.max(mins, 3);
   if (mins) cooling.set(name, { until: Date.now() + mins * 60000, reason: msg.slice(0, 160) });
 }
 function providerStatus() {
@@ -102,6 +102,9 @@ async function chatChain(list, system, messages, tools = null, maxTokens = 8192,
     }
     try {
       const res = await api.chat(provider, model, system, messages, tools, maxTokens, order.length > 1 ? 2 : 4); // api.chat so tests can replace it
+      // Some services (Pollinations) answer "out of credits" as a normal reply instead of an error: treat it as one
+      if ((!res.tool_calls || !res.tool_calls.length) && /doesn'?t have enough credits|insufficient (credits|balance)|top[- ]?up\?ref=|low_balance/i.test(res.text || ''))
+        throw new LLMError(`HTTP 402: out of credits (${shortErr(res.text)})`);
       cooling.delete(provider);
       return { ...res, provider, model: model || providerConfig(provider).model };
     } catch (e) {
@@ -126,7 +129,7 @@ async function listModels(name, fresh = false) {
   const headers = cfg.kind === 'anthropic'
     ? { 'x-api-key': cfg.api_key, 'anthropic-version': '2023-06-01' }
     : (cfg.api_key ? { authorization: `Bearer ${cfg.api_key}` } : {});
-  const r = await fetch(`${cfg.base_url}/models${cfg.kind === 'anthropic' ? '?limit=1000' : ''}`, { headers, signal: AbortSignal.timeout(30000) });
+  const r = await require('./relay').fetchSmart(`${cfg.base_url}/models${cfg.kind === 'anthropic' ? '?limit=1000' : ''}`, { headers, signal: AbortSignal.timeout(30000) });
   const text = await r.text();
   if (!r.ok) throw new LLMError(`Could not list ${cfg.label} models: HTTP ${r.status} ${text.slice(0, 200)}`);
   let j; try { j = JSON.parse(text); } catch (_) { throw new LLMError(`Bad model list from ${cfg.label}`); }
@@ -157,9 +160,9 @@ async function post(url, headers, body, retries = 4) {
   for (let attempt = 0; attempt < retries; attempt++) {
     let r;
     try {
-      r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(300000) });
+      r = await require('./relay').fetchSmart(url, { method: 'POST', headers: { 'user-agent': 'DocumentaryStudio/2.1 (+https://github.com/DineshTechs/documentaryAI) Node.js', ...headers }, body: JSON.stringify(body), signal: AbortSignal.timeout(300000) });
     } catch (e) {
-      last = e.message; await sleep(2 ** attempt * 1000); continue;
+      last = require('./mcp').netError(e, url); await sleep(2 ** attempt * 1000); continue;
     }
     const text = await r.text();
     if ([429, 500, 502, 503, 504, 529].includes(r.status)) { last = `HTTP ${r.status}: ${text.slice(0, 400)}`; await sleep(Math.min(30000, 3000 * 2 ** attempt)); continue; }

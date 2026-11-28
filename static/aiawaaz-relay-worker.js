@@ -1,4 +1,4 @@
-// AI Awaaz relay for Documentary Studio: a free Cloudflare Worker.
+// AI Awaaz (and AI provider) relay for Documentary Studio: a free Cloudflare Worker.
 // Your server (e.g. MilesWeb) can't reach app.aiawaaz.io directly, so it sends its voice requests here,
 // and this passes them on to AI Awaaz and sends the answer back. Nothing is stored.
 //
@@ -10,13 +10,15 @@
 //  4. Copy the worker address (https://aiawaaz-relay.<you>.workers.dev) into Documentary Studio → Relay address → Save.
 
 const MCP_URL = 'https://app.aiawaaz.io/api/mcp';
+// Other services it may forward to (AI providers, ElevenLabs, Wikimedia), only with the relay key
+const ALLOWED = /^(api\.anthropic\.com|api\.openai\.com|generativelanguage\.googleapis\.com|openrouter\.ai|api\.deepseek\.com|api\.groq\.com|api\.mistral\.ai|api\.x\.ai|gen\.pollinations\.ai|text\.pollinations\.ai|api\.elevenlabs\.io|commons\.wikimedia\.org|upload\.wikimedia\.org)$/;
 // Audio files may be served from AI Awaaz or its storage; only https downloads are relayed, and only with the key.
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === '/health' || url.pathname === '/') return Response.json({
-      ok: true, relay: 'aiawaaz', key_set: !!env.RELAY_KEY,
+      ok: true, relay: 'aiawaaz', version: 2, key_set: !!env.RELAY_KEY,
       note: env.RELAY_KEY ? 'The relay is running. Only Documentary Studio (with the relay key) can use it, so opening it in a browser shows nothing else.' : 'Add a Secret named RELAY_KEY in this worker\'s Settings → Variables and Secrets.',
     });
 
@@ -25,7 +27,12 @@ export default {
     if (!safeEqual(request.headers.get('x-relay-key') || '', env.RELAY_KEY)) return Response.json({ error: 'Wrong relay key' }, { status: 401 });
 
     let target;
-    if (url.pathname === '/mcp') target = MCP_URL;
+    if (url.pathname === '/proxy') {
+      // AI providers and other services the app uses, for servers whose firewall blocks them
+      target = url.searchParams.get('u') || '';
+      let host = ''; try { host = new URL(target).host; } catch (_) { /* bad url */ }
+      if (!/^https:\/\//i.test(target) || !ALLOWED.test(host)) return Response.json({ error: `Not allowed through this relay: ${host || target}` }, { status: 403 });
+    } else if (url.pathname === '/mcp') target = MCP_URL;
     else if (url.pathname === '/file') {
       target = url.searchParams.get('u') || '';
       if (!/^https:\/\//i.test(target)) return Response.json({ error: 'Only https file links are relayed' }, { status: 400 });
