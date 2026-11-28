@@ -936,6 +936,7 @@ async function viewSettings(section = "overview") {
       ${Object.entries(META.providers).map(([k, v]) => { const c = prov[k] || {}; const ready = has(c.api_key) || (k === "custom" ? has(c.base_url) : !!v.no_key); return `<details class="prov" ${k === prioList[0] ? "open" : ""}>
         <summary><span>${esc(v.label)}</span>${prioList.includes(k) ? `<span class="tag">#${prioList.indexOf(k) + 1}</span>` : ""}${has(c.api_key) ? '<span class="ok">● key saved</span>' : ready ? '<span class="ok">● no key needed</span>' : '<span class="hint">not set</span>'}</summary>${v.note ? `<div class="hint" style="margin:8px 0 0">${esc(v.note)}</div>` : ""}
         <div class="row">${field(`p-${k}-key`, "API key", c.api_key, { type: "password", ph: v.no_key ? "(optional)" : "paste key" }).replace("<input", `<input data-p="${k}" data-f="api_key"`)}${combo(`p-${k}-model`, "Model", c.model, { load: true, ph: v.model_hint, attrs: `data-p="${k}" data-f="model"` })}</div>
+        ${combo(`p-${k}-backup`, "Backup model (used when the model above is busy)", c.backup_model || "", { load: true, ph: k === "gemini" ? "empty = another Flash model automatically" : "optional", attrs: `data-p="${k}" data-f="backup_model"` })}
         ${field(`p-${k}-url`, "Base URL (change only for proxies or self-hosted)", c.base_url, { ph: v.base_url }).replace("<input", `<input data-p="${k}" data-f="base_url"`)}
         <button class="sm" data-test="${k}" style="margin-top:10px">Test connection</button></details>`; }).join("")}
     </section>
@@ -1048,7 +1049,7 @@ async function viewSettings(section = "overview") {
   const models = (k) => async (fresh) => { if (fresh) await saveAll(); return (await getJson(`/api/llm/models/${k}`, fresh)).models; };
   const voices = (k) => async (fresh) => { if (fresh) await saveAll(); return (await getJson(`/api/tts/voices/${k}`, fresh)).voices; };
   const loaders = { "t-avoice": voices("aiawaaz"), "t-evoice": voices("elevenlabs"), "t-ovoice": voices("openai")};
-  Object.keys(META.providers).forEach((k) => (loaders[`p-${k}-model`] = models(k)));
+  Object.keys(META.providers).forEach((k) => { loaders[`p-${k}-model`] = models(k); loaders[`p-${k}-backup`] = models(k); });
   wireCombos($("#body"), loaders);
   const keySaved = (k) => has((prov[k] || {}).api_key) || !!(META.providers[k] || {}).no_key;
   const loaded = new Set();

@@ -109,12 +109,37 @@ async function chatChain(list, system, messages, tools = null, maxTokens = 8192,
       return { ...res, provider, model: model || providerConfig(provider).model };
     } catch (e) {
       const label = PROVIDERS[provider]?.label || provider;
+      // "model busy / high demand": try another model of the same provider before giving up on it
+      if (/HTTP 503|HTTP 529|overloaded|high demand|UNAVAILABLE/i.test(e.message)) {
+        const alt = await backupModel(provider, model || providerConfig(provider).model).catch(() => null);
+        if (alt) {
+          try {
+            const res = await api.chat(provider, alt, system, messages, tools, maxTokens, 2);
+            if (onSwitch) onSwitch(`${provider} ${model || ''}`.trim(), `${provider} ${alt}`, shortErr(e.message));
+            cooling.delete(provider);
+            return { ...res, provider, model: alt };
+          } catch (e2) { e.message += ` | backup model ${alt}: ${shortErr(e2.message)}`; }
+        }
+      }
       errors.push(`${label}: ${shortErr(e.message)}`);
       coolDown(provider, e.message);
       if (i < order.length - 1 && onSwitch) onSwitch(provider, order[i + 1].provider, shortErr(e.message));
     }
   }
   throw new LLMError(errors.length > 1 ? `All AI providers failed:\n- ${errors.join('\n- ')}` : errors[0].replace(/^[^:]+: /, ''));
+}
+
+// A second model of the same provider to use when the chosen one is overloaded:
+// the "Backup model" from Settings, or for Gemini the next Flash model it offers.
+async function backupModel(provider, current) {
+  const set = (store.getSetting('providers', {}) || {})[provider] || {};
+  if (set.backup_model && set.backup_model !== current) return set.backup_model;
+  if (provider !== 'gemini') return null;
+  const list = await listModels(provider);
+  const flash = list.map((m) => m.id).filter((id) => /flash/i.test(id) && id !== current && !/image|tts|live|audio|thinking-exp|embedding|computer/i.test(id));
+  // prefer a stable model over previews, and the lighter ones (busy less often)
+  flash.sort((a, b) => (/preview|exp/i.test(a) - /preview|exp/i.test(b)) || (/lite/i.test(b) - /lite/i.test(a)));
+  return flash[0] || null;
 }
 
 // ---------------------------------------------------------------- model lists (for the Settings dropdowns)
